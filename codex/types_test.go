@@ -75,19 +75,27 @@ func TestTurnStartParamsSerialization(t *testing.T) {
 }
 
 func TestThreadStartResultDeserialization(t *testing.T) {
-	// Simulated response from Codex
+	// Real response format from Codex app-server
 	jsonData := `{
 		"thread": {
-			"id": "abc123def456",
+			"id": "019c2468-4889-7710-9218-9afd7ecf3100",
 			"preview": "",
-			"createdAt": 1234567890,
-			"updatedAt": 1234567890,
-			"cwd": "/home/user",
-			"modelProvider": "anthropic",
+			"modelProvider": "openai",
+			"createdAt": 1770137340,
+			"updatedAt": 1770137340,
+			"path": "/home/rick/.codex/sessions/2026/02/04/rollout.jsonl",
+			"cwd": "/media/rick/MAIN",
 			"cliVersion": "0.94.0",
-			"source": "appServer",
+			"source": "vscode",
+			"gitInfo": null,
 			"turns": []
-		}
+		},
+		"model": "gpt-5.2-codex",
+		"modelProvider": "openai",
+		"cwd": "/media/rick/MAIN",
+		"approvalPolicy": "on-request",
+		"sandbox": {"type": "workspaceWrite"},
+		"reasoningEffort": null
 	}`
 
 	var result ThreadStartResult
@@ -96,8 +104,14 @@ func TestThreadStartResultDeserialization(t *testing.T) {
 		t.Fatalf("Failed to unmarshal: %v", err)
 	}
 
-	if result.Thread.ID != "abc123def456" {
-		t.Errorf("Thread ID mismatch: got %v, want abc123def456", result.Thread.ID)
+	if result.Thread.ID != "019c2468-4889-7710-9218-9afd7ecf3100" {
+		t.Errorf("Thread ID mismatch: got %q, want 019c2468-4889-7710-9218-9afd7ecf3100", result.Thread.ID)
+	}
+	if result.Thread.ModelProvider != "openai" {
+		t.Errorf("ModelProvider mismatch: got %q", result.Thread.ModelProvider)
+	}
+	if result.Thread.Cwd != "/media/rick/MAIN" {
+		t.Errorf("Cwd mismatch: got %q", result.Thread.Cwd)
 	}
 }
 
@@ -247,5 +261,389 @@ func TestTurnCompletedParams(t *testing.T) {
 
 	if params.Status != "completed" {
 		t.Errorf("Status mismatch: got %v", params.Status)
+	}
+}
+
+func TestExecutionStatus(t *testing.T) {
+	if StatusPending != "pending" {
+		t.Error("StatusPending mismatch")
+	}
+	if StatusRunning != "running" {
+		t.Error("StatusRunning mismatch")
+	}
+	if StatusCompleted != "completed" {
+		t.Error("StatusCompleted mismatch")
+	}
+	if StatusFailed != "failed" {
+		t.Error("StatusFailed mismatch")
+	}
+}
+
+func TestEventMethods(t *testing.T) {
+	methods := []string{
+		MethodThreadStarted,
+		MethodThreadNameUpdated,
+		MethodTokenUsageUpdated,
+		MethodTurnStarted,
+		MethodTurnCompleted,
+		MethodItemStarted,
+		MethodItemCompleted,
+		MethodAgentMessageDelta,
+		MethodReasoningTextDelta,
+		MethodCommandExecutionOutputDelta,
+		MethodCommandExecutionRequestApproval,
+		MethodFileChangeRequestApproval,
+	}
+
+	for _, method := range methods {
+		if method == "" {
+			t.Error("Empty method constant found")
+		}
+	}
+}
+
+func TestThreadItem(t *testing.T) {
+	item := ThreadItem{
+		Type:    "agentMessage",
+		ID:      "item-1",
+		Text:    "Hello",
+		Command: "ls -la",
+		Status:  StatusCompleted,
+		Output:  "file1.txt\nfile2.txt",
+	}
+
+	if item.Type != "agentMessage" {
+		t.Error("Type mismatch")
+	}
+	if item.Text != "Hello" {
+		t.Error("Text mismatch")
+	}
+	if item.Command != "ls -la" {
+		t.Error("Command mismatch")
+	}
+}
+
+func TestFileChange(t *testing.T) {
+	change := FileChange{
+		Path: "/path/to/file.go",
+		Diff: "+line added\n-line removed",
+	}
+
+	if change.Path != "/path/to/file.go" {
+		t.Error("Path mismatch")
+	}
+	if change.Diff == "" {
+		t.Error("Diff should not be empty")
+	}
+}
+
+func TestTurn(t *testing.T) {
+	turn := Turn{
+		ID:     "turn-1",
+		Status: "completed",
+		Items: []ThreadItem{
+			{Type: "agentMessage", ID: "item-1"},
+		},
+		Error: &TurnError{Type: "error", Message: "something went wrong"},
+	}
+
+	if turn.ID != "turn-1" {
+		t.Error("ID mismatch")
+	}
+	if len(turn.Items) != 1 {
+		t.Error("Items length mismatch")
+	}
+	if turn.Error == nil || turn.Error.Message != "something went wrong" {
+		t.Error("Error mismatch")
+	}
+}
+
+func TestThread(t *testing.T) {
+	thread := Thread{
+		ID:            "thread-123",
+		Preview:       "Test preview",
+		ModelProvider: "openai",
+		CreatedAt:     1000000,
+		UpdatedAt:     1000001,
+		Archived:      false,
+		Cwd:           "/home/user",
+		CliVersion:    "1.0.0",
+		Path:          "/path/to/session.jsonl",
+	}
+
+	if thread.ID != "thread-123" {
+		t.Error("ID mismatch")
+	}
+	if thread.ModelProvider != "openai" {
+		t.Error("ModelProvider mismatch")
+	}
+}
+
+func TestInitializeParams(t *testing.T) {
+	params := InitializeParams{
+		ClientInfo: ClientInfo{
+			Name:    "test-client",
+			Version: "1.0.0",
+		},
+	}
+
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("Failed to marshal: %v", err)
+	}
+
+	var result map[string]interface{}
+	json.Unmarshal(data, &result)
+
+	clientInfo := result["clientInfo"].(map[string]interface{})
+	if clientInfo["name"] != "test-client" {
+		t.Error("ClientInfo name mismatch")
+	}
+}
+
+func TestThreadStartParams(t *testing.T) {
+	params := ThreadStartParams{
+		Name:            "Test Thread",
+		Model:           "gpt-4",
+		Cwd:             "/home/user",
+		ApprovalPolicy:  "auto",
+		ReasoningEffort: "high",
+	}
+
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("Failed to marshal: %v", err)
+	}
+
+	var result map[string]interface{}
+	json.Unmarshal(data, &result)
+
+	if result["name"] != "Test Thread" {
+		t.Error("Name mismatch")
+	}
+}
+
+func TestApprovalResponse(t *testing.T) {
+	resp := ApprovalResponse{
+		Decision: "accept",
+		AcceptSettings: map[string]string{
+			"timeout": "300",
+		},
+	}
+
+	data, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("Failed to marshal: %v", err)
+	}
+
+	var result map[string]interface{}
+	json.Unmarshal(data, &result)
+
+	if result["decision"] != "accept" {
+		t.Error("Decision mismatch")
+	}
+}
+
+func TestCommandExecutionApprovalParams(t *testing.T) {
+	jsonStr := `{
+		"threadId": "thread-1",
+		"turnId": "turn-1",
+		"itemId": "item-1",
+		"command": "rm -rf /tmp/test",
+		"cwd": "/home/user"
+	}`
+
+	var params CommandExecutionApprovalParams
+	err := json.Unmarshal([]byte(jsonStr), &params)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	if params.Command != "rm -rf /tmp/test" {
+		t.Error("Command mismatch")
+	}
+	if params.Cwd != "/home/user" {
+		t.Error("Cwd mismatch")
+	}
+}
+
+func TestFileChangeApprovalParams(t *testing.T) {
+	jsonStr := `{
+		"threadId": "thread-1",
+		"turnId": "turn-1",
+		"itemId": "item-1",
+		"changes": [
+			{"path": "/file1.go", "diff": "+line1"},
+			{"path": "/file2.go", "diff": "-line2"}
+		]
+	}`
+
+	var params FileChangeApprovalParams
+	err := json.Unmarshal([]byte(jsonStr), &params)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	if len(params.Changes) != 2 {
+		t.Errorf("Expected 2 changes, got %d", len(params.Changes))
+	}
+}
+
+func TestTokenUsageUpdatedParams(t *testing.T) {
+	jsonStr := `{
+		"threadId": "thread-1",
+		"inputTokens": 1000,
+		"outputTokens": 500
+	}`
+
+	var params TokenUsageUpdatedParams
+	err := json.Unmarshal([]byte(jsonStr), &params)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	if params.InputTokens != 1000 {
+		t.Error("InputTokens mismatch")
+	}
+	if params.OutputTokens != 500 {
+		t.Error("OutputTokens mismatch")
+	}
+}
+
+func TestItemStartedParams(t *testing.T) {
+	jsonStr := `{
+		"threadId": "thread-1",
+		"turnId": "turn-1",
+		"item": {
+			"type": "commandExecution",
+			"id": "item-1",
+			"command": "ls"
+		}
+	}`
+
+	var params ItemStartedParams
+	err := json.Unmarshal([]byte(jsonStr), &params)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	if params.Item == nil {
+		t.Fatal("Item should not be nil")
+	}
+	if params.Item.Type != "commandExecution" {
+		t.Error("Item type mismatch")
+	}
+}
+
+func TestReasoningTextDeltaParams(t *testing.T) {
+	jsonStr := `{
+		"threadId": "thread-1",
+		"turnId": "turn-1",
+		"itemId": "item-1",
+		"delta": "thinking..."
+	}`
+
+	var params ReasoningTextDeltaParams
+	err := json.Unmarshal([]byte(jsonStr), &params)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	if params.Delta != "thinking..." {
+		t.Error("Delta mismatch")
+	}
+}
+
+func TestCommandExecutionOutputDeltaParams(t *testing.T) {
+	jsonStr := `{
+		"threadId": "thread-1",
+		"turnId": "turn-1",
+		"itemId": "item-1",
+		"delta": "output line\n"
+	}`
+
+	var params CommandExecutionOutputDeltaParams
+	err := json.Unmarshal([]byte(jsonStr), &params)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	if params.Delta != "output line\n" {
+		t.Error("Delta mismatch")
+	}
+}
+
+func TestThreadStartedParams(t *testing.T) {
+	jsonStr := `{
+		"threadId": "thread-1",
+		"thread": {
+			"id": "thread-1",
+			"preview": "test"
+		}
+	}`
+
+	var params ThreadStartedParams
+	err := json.Unmarshal([]byte(jsonStr), &params)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	if params.ThreadID != "thread-1" {
+		t.Error("ThreadID mismatch")
+	}
+}
+
+func TestThreadNameUpdatedParams(t *testing.T) {
+	jsonStr := `{
+		"threadId": "thread-1",
+		"name": "New Name"
+	}`
+
+	var params ThreadNameUpdatedParams
+	err := json.Unmarshal([]byte(jsonStr), &params)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	if params.Name != "New Name" {
+		t.Error("Name mismatch")
+	}
+}
+
+func TestTurnStartedParams(t *testing.T) {
+	jsonStr := `{
+		"threadId": "thread-1",
+		"turn": {
+			"id": "turn-1",
+			"status": "inProgress"
+		}
+	}`
+
+	var params TurnStartedParams
+	err := json.Unmarshal([]byte(jsonStr), &params)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	if params.Turn == nil {
+		t.Fatal("Turn should not be nil")
+	}
+	if params.Turn.Status != "inProgress" {
+		t.Error("Turn status mismatch")
+	}
+}
+
+func TestRPCError(t *testing.T) {
+	rpcErr := RPCError{
+		Code:    -32600,
+		Message: "Invalid request",
+		Data:    map[string]string{"detail": "missing field"},
+	}
+
+	if rpcErr.Code != -32600 {
+		t.Error("Code mismatch")
+	}
+	if rpcErr.Message != "Invalid request" {
+		t.Error("Message mismatch")
 	}
 }

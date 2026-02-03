@@ -288,3 +288,93 @@ func TestCreateOrReplace(t *testing.T) {
 		t.Errorf("Expected 1 entry after replace, got %d", len(entries))
 	}
 }
+
+func TestIsFresh_DailyReset(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	now := time.Now()
+	resetHour := now.Hour() // Reset at current hour
+
+	store, err := NewStore(dbPath, 0, resetHour) // No idle timeout
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Entry from yesterday should not be fresh
+	yesterdayEntry := &Entry{
+		ChatID:    "test",
+		ThreadID:  "thread",
+		UpdatedAt: now.Add(-25 * time.Hour),
+	}
+	if store.IsFresh(yesterdayEntry) {
+		t.Error("Yesterday's entry should not be fresh after reset hour")
+	}
+
+	// Entry from a few minutes ago should be fresh
+	recentEntry := &Entry{
+		ChatID:    "test",
+		ThreadID:  "thread",
+		UpdatedAt: now.Add(-5 * time.Minute),
+	}
+	if !store.IsFresh(recentEntry) {
+		t.Error("Recent entry should be fresh")
+	}
+}
+
+func TestCleanupStale_Disabled(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	// 0 or negative idle timeout disables cleanup
+	store, err := NewStore(dbPath, 0, -1)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	count, err := store.CleanupStale()
+	if err != nil {
+		t.Fatalf("CleanupStale failed: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("Expected 0 when disabled, got %d", count)
+	}
+}
+
+func TestNewStore_InvalidPath(t *testing.T) {
+	// Try to create store in non-existent nested directory
+	// This should succeed because NewStore creates the directory
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "nested", "path", "test.db")
+
+	store, err := NewStore(dbPath, 60, -1)
+	if err != nil {
+		t.Fatalf("Failed to create store in nested path: %v", err)
+	}
+	defer store.Close()
+}
+
+func TestEntry_Fields(t *testing.T) {
+	now := time.Now()
+	entry := Entry{
+		ChatID:    "chat_123",
+		ThreadID:  "thread_456",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if entry.ChatID != "chat_123" {
+		t.Error("ChatID mismatch")
+	}
+	if entry.ThreadID != "thread_456" {
+		t.Error("ThreadID mismatch")
+	}
+	if !entry.CreatedAt.Equal(now) {
+		t.Error("CreatedAt mismatch")
+	}
+	if !entry.UpdatedAt.Equal(now) {
+		t.Error("UpdatedAt mismatch")
+	}
+}

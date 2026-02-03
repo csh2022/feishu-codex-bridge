@@ -42,6 +42,7 @@ type Bridge struct {
 type ChatState struct {
 	ThreadID   string
 	TurnID     string
+	MsgID      string // Current message ID for reactions
 	Processing bool
 	Buffer     strings.Builder
 	LastItem   string
@@ -92,7 +93,7 @@ func (b *Bridge) Start() error {
 	go b.processEvents()
 
 	// Set up Feishu message handler
-	b.feishuClient.OnMessage(b.handleFeishuMessage)
+	b.feishuClient.OnMessage(b.handleFeishuMessageV2)
 
 	// Start session cleanup
 	b.StartSessionCleanup(10 * time.Minute)
@@ -114,27 +115,42 @@ func (b *Bridge) Stop() {
 	fmt.Println("[Bridge] Stopped")
 }
 
-func (b *Bridge) handleFeishuMessage(chatID, msgID, content string) {
-	fmt.Printf("[Bridge] Received from %s: %s\n", chatID, truncate(content, 50))
+func (b *Bridge) handleFeishuMessageV2(msg *feishu.Message) {
+	fmt.Printf("[Bridge] Received %s from %s: %s\n", msg.MsgType, msg.ChatID, truncate(msg.Content, 50))
 
 	// Get or create chat state
-	state := b.getChatState(chatID)
+	state := b.getChatState(msg.ChatID)
 
 	state.mu.Lock()
 	if state.Processing {
 		state.mu.Unlock()
 		// Queue or ignore - for now, just notify user
-		b.feishuClient.SendText(chatID, "⏳ 正在處理上一個請求，請稍候...")
+		b.feishuClient.SendText(msg.ChatID, "⏳ 正在處理上一個請求，請稍候...")
 		return
 	}
 	state.Processing = true
+	state.MsgID = msg.MsgID
 	state.mu.Unlock()
 
+	// Add processing reaction
+	b.feishuClient.AddReaction(msg.MsgID, "OnIt")
+
+	// Download images if any
+	var imagePaths []string
+	for _, imageKey := range msg.ImageKeys {
+		path, err := b.feishuClient.DownloadImage(msg.MsgID, imageKey)
+		if err != nil {
+			fmt.Printf("[Bridge] Failed to download image %s: %v\n", imageKey, err)
+			continue
+		}
+		imagePaths = append(imagePaths, path)
+	}
+
 	// Process in goroutine
-	go b.processMessage(chatID, content, state)
+	go b.processMessageV2(msg.ChatID, msg.MsgID, msg.Content, imagePaths, state)
 }
 
-func (b *Bridge) processMessage(chatID, content string, state *ChatState) {
+func (b *Bridge) processMessageV2(chatID, msgID, content string, imagePaths []string, state *ChatState) {
 	defer func() {
 		state.mu.Lock()
 		state.Processing = false
@@ -175,12 +191,37 @@ func (b *Bridge) processMessage(chatID, content string, state *ChatState) {
 	state.Buffer.Reset()
 	state.mu.Unlock()
 
-	// Start turn
-	turnID, err := b.codexClient.TurnStart(ctx, threadID, content, nil)
+	// Start turn with images
+	turnID, err := b.codexClient.TurnStart(ctx, threadID, content, imagePaths)
 	if err != nil {
-		errMsg := fmt.Sprintf("❌ 發送請求失敗: %v", err)
-		b.feishuClient.SendText(chatID, errMsg)
-		return
+		// If thread not found, create a new one and retry
+		if strings.Contains(err.Error(), "thread not found") {
+			fmt.Printf("[Bridge] Thread %s not found, creating new one\n", threadID)
+			b.sessionStore.Delete(chatID)
+
+			threadID, err = b.codexClient.ThreadStart(ctx, nil)
+			if err != nil {
+				errMsg := fmt.Sprintf("❌ 創建會話失敗: %v", err)
+				b.feishuClient.SendText(chatID, errMsg)
+				return
+			}
+			b.sessionStore.Create(chatID, threadID)
+
+			state.mu.Lock()
+			state.ThreadID = threadID
+			state.mu.Unlock()
+
+			turnID, err = b.codexClient.TurnStart(ctx, threadID, content, imagePaths)
+			if err != nil {
+				errMsg := fmt.Sprintf("❌ 發送請求失敗: %v", err)
+				b.feishuClient.SendText(chatID, errMsg)
+				return
+			}
+		} else {
+			errMsg := fmt.Sprintf("❌ 發送請求失敗: %v", err)
+			b.feishuClient.SendText(chatID, errMsg)
+			return
+		}
 	}
 
 	state.mu.Lock()
@@ -268,11 +309,17 @@ func (b *Bridge) handleTurnCompleted(params codex.TurnCompletedParams) {
 	state := b.getChatState(chatID)
 	state.mu.Lock()
 	response := state.Buffer.String()
+	msgID := state.MsgID
 	state.Buffer.Reset()
 	state.mu.Unlock()
 
 	if response == "" {
 		response = "✅ (無文字回應)"
+	}
+
+	// Add completion reaction
+	if msgID != "" {
+		b.feishuClient.AddReaction(msgID, "DONE")
 	}
 
 	// Send to Feishu

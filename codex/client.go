@@ -168,6 +168,10 @@ func (c *Client) ThreadStart(ctx context.Context, params *ThreadStartParams) (st
 		return "", fmt.Errorf("failed to parse thread/start result: %w", err)
 	}
 
+	if result.Thread.ID == "" {
+		return "", fmt.Errorf("thread/start returned empty thread ID")
+	}
+
 	return result.Thread.ID, nil
 }
 

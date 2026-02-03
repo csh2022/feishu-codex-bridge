@@ -53,11 +53,14 @@ type InitializeResult struct {
 type Thread struct {
 	ID            string `json:"id"`
 	Preview       string `json:"preview"`
-	ModelProvider string `json:"model_provider,omitempty"`
-	CreatedAt     int64  `json:"created_at"`
-	UpdatedAt     int64  `json:"updated_at,omitempty"`
-	Archived      bool   `json:"archived"`
+	ModelProvider string `json:"modelProvider,omitempty"`
+	CreatedAt     int64  `json:"createdAt"`
+	UpdatedAt     int64  `json:"updatedAt,omitempty"`
+	Archived      bool   `json:"archived,omitempty"`
 	Turns         []Turn `json:"turns,omitempty"`
+	Cwd           string `json:"cwd,omitempty"`
+	CliVersion    string `json:"cliVersion,omitempty"`
+	Path          string `json:"path,omitempty"`
 }
 
 type Turn struct {
