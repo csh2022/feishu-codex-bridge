@@ -289,3 +289,154 @@ func TestStop(t *testing.T) {
 	// Should not panic after Stop is called multiple times
 	client.Stop()
 }
+
+func TestSender(t *testing.T) {
+	sender := &Sender{
+		SenderID:   "user_123",
+		SenderType: "user",
+		TenantKey:  "tenant_456",
+	}
+
+	if sender.SenderID != "user_123" {
+		t.Error("SenderID mismatch")
+	}
+	if sender.SenderType != "user" {
+		t.Error("SenderType mismatch")
+	}
+	if sender.TenantKey != "tenant_456" {
+		t.Error("TenantKey mismatch")
+	}
+}
+
+func TestChatMember(t *testing.T) {
+	member := &ChatMember{
+		MemberID:   "member_123",
+		MemberType: "user",
+		Name:       "Test User",
+	}
+
+	if member.MemberID != "member_123" {
+		t.Error("MemberID mismatch")
+	}
+	if member.MemberType != "user" {
+		t.Error("MemberType mismatch")
+	}
+	if member.Name != "Test User" {
+		t.Error("Name mismatch")
+	}
+}
+
+func TestChatInfo(t *testing.T) {
+	info := &ChatInfo{
+		ChatID:      "chat_123",
+		Name:        "Test Group",
+		Description: "A test group",
+		ChatType:    "group",
+		OwnerID:     "owner_456",
+		MemberCount: 10,
+	}
+
+	if info.ChatID != "chat_123" {
+		t.Error("ChatID mismatch")
+	}
+	if info.Name != "Test Group" {
+		t.Error("Name mismatch")
+	}
+	if info.MemberCount != 10 {
+		t.Error("MemberCount mismatch")
+	}
+}
+
+func TestHistoryMessage(t *testing.T) {
+	msg := &HistoryMessage{
+		MsgID:      "msg_123",
+		MsgType:    "text",
+		Content:    `{"text": "Hello"}`,
+		CreateTime: "1234567890",
+		Sender: &Sender{
+			SenderID:   "user_456",
+			SenderType: "user",
+		},
+	}
+
+	if msg.MsgID != "msg_123" {
+		t.Error("MsgID mismatch")
+	}
+	if msg.Sender == nil {
+		t.Error("Sender should not be nil")
+	}
+	if msg.Sender.SenderID != "user_456" {
+		t.Error("Sender ID mismatch")
+	}
+}
+
+func TestFormatHistoryAsContext(t *testing.T) {
+	messages := []*HistoryMessage{
+		{
+			MsgID:   "msg_3",
+			MsgType: "text",
+			Content: `{"text": "Third message"}`,
+			Sender:  &Sender{SenderType: "user"},
+		},
+		{
+			MsgID:   "msg_2",
+			MsgType: "text",
+			Content: `{"text": "Second message"}`,
+			Sender:  &Sender{SenderType: "bot"},
+		},
+		{
+			MsgID:   "msg_1",
+			MsgType: "text",
+			Content: `{"text": "First message"}`,
+			Sender:  &Sender{SenderType: "user"},
+		},
+	}
+
+	// Test normal formatting
+	result := FormatHistoryAsContext(messages, 0)
+	if result == "" {
+		t.Error("Result should not be empty")
+	}
+
+	// Test with max limit
+	result = FormatHistoryAsContext(messages, 2)
+	if result == "" {
+		t.Error("Result should not be empty with limit")
+	}
+
+	// Test empty messages
+	result = FormatHistoryAsContext(nil, 0)
+	if result != "" {
+		t.Error("Empty messages should return empty string")
+	}
+
+	result = FormatHistoryAsContext([]*HistoryMessage{}, 0)
+	if result != "" {
+		t.Error("Empty slice should return empty string")
+	}
+}
+
+func TestMessageWithSenderAndMentions(t *testing.T) {
+	msg := &Message{
+		ChatID:   "chat_123",
+		MsgID:    "msg_456",
+		MsgType:  "text",
+		ChatType: "group",
+		Content:  "Hello @bot",
+		Sender: &Sender{
+			SenderID:   "user_789",
+			SenderType: "user",
+		},
+		Mentions: []string{"bot_id_1", "user_id_2"},
+	}
+
+	if msg.ChatType != "group" {
+		t.Error("ChatType mismatch")
+	}
+	if msg.Sender == nil {
+		t.Error("Sender should not be nil")
+	}
+	if len(msg.Mentions) != 2 {
+		t.Errorf("Mentions length mismatch: got %d, want 2", len(msg.Mentions))
+	}
+}

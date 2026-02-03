@@ -11,6 +11,9 @@ type FeishuClient interface {
 	RemoveReaction(messageID, reactionID string) error
 	DownloadImage(messageID, imageKey string) (string, error)
 	SetDownloadDir(dir string)
+	GetChatHistory(chatID string, pageSize int) ([]*HistoryMessage, error)
+	GetChatMembers(chatID string) ([]*ChatMember, error)
+	GetChatInfo(chatID string) (*ChatInfo, error)
 }
 
 // Ensure Client implements FeishuClient

@@ -20,8 +20,44 @@ type Message struct {
 	ChatID    string
 	MsgID     string
 	MsgType   string   // text, image, post
+	ChatType  string   // p2p (private), group
 	Content   string   // Text content (extracted from all message types)
 	ImageKeys []string // Image keys for downloading
+	Sender    *Sender  // Message sender info
+	Mentions  []string // Mentioned user IDs (including bot)
+}
+
+// Sender represents the message sender
+type Sender struct {
+	SenderID   string // User ID or bot ID
+	SenderType string // user, bot
+	TenantKey  string
+}
+
+// ChatMember represents a member in a chat
+type ChatMember struct {
+	MemberID   string `json:"member_id"`
+	MemberType string `json:"member_type"` // user, bot
+	Name       string `json:"name"`
+}
+
+// ChatInfo represents information about a chat
+type ChatInfo struct {
+	ChatID      string `json:"chat_id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	ChatType    string `json:"chat_type"` // p2p, group
+	OwnerID     string `json:"owner_id"`
+	MemberCount int    `json:"user_count"`
+}
+
+// HistoryMessage represents a message from chat history
+type HistoryMessage struct {
+	MsgID      string `json:"message_id"`
+	MsgType    string `json:"msg_type"`
+	Content    string `json:"content"`
+	CreateTime string `json:"create_time"`
+	Sender     *Sender
 }
 
 // MessageHandler is the callback for received messages
@@ -104,6 +140,36 @@ func (c *Client) handleMessage(event *larkim.P2MessageReceiveV1) {
 		MsgType: *rawMsg.MessageType,
 	}
 
+	// Parse chat type
+	if rawMsg.ChatType != nil {
+		msg.ChatType = *rawMsg.ChatType
+	}
+
+	// Parse sender info
+	if event.Event.Sender != nil {
+		msg.Sender = &Sender{}
+		if event.Event.Sender.SenderId != nil {
+			if event.Event.Sender.SenderId.OpenId != nil {
+				msg.Sender.SenderID = *event.Event.Sender.SenderId.OpenId
+			}
+		}
+		if event.Event.Sender.SenderType != nil {
+			msg.Sender.SenderType = *event.Event.Sender.SenderType
+		}
+		if event.Event.Sender.TenantKey != nil {
+			msg.Sender.TenantKey = *event.Event.Sender.TenantKey
+		}
+	}
+
+	// Parse mentions
+	if rawMsg.Mentions != nil {
+		for _, mention := range rawMsg.Mentions {
+			if mention.Id != nil && mention.Id.OpenId != nil {
+				msg.Mentions = append(msg.Mentions, *mention.Id.OpenId)
+			}
+		}
+	}
+
 	switch msg.MsgType {
 	case "text":
 		msg.Content = c.parseTextContent(*rawMsg.Content)
@@ -120,7 +186,7 @@ func (c *Client) handleMessage(event *larkim.P2MessageReceiveV1) {
 		return
 	}
 
-	fmt.Printf("[Feishu] Received %s from chat %s: %s\n", msg.MsgType, msg.ChatID, truncate(msg.Content, 50))
+	fmt.Printf("[Feishu] Received %s from %s chat %s: %s\n", msg.MsgType, msg.ChatType, msg.ChatID, truncate(msg.Content, 50))
 
 	if c.onMessage != nil {
 		c.onMessage(msg)
@@ -329,6 +395,172 @@ func (c *Client) RemoveReaction(messageID, reactionID string) error {
 
 	fmt.Printf("[Feishu] Reaction removed from message %s\n", messageID)
 	return nil
+}
+
+// GetChatHistory retrieves recent messages from a chat
+// pageSize: number of messages to retrieve (max 50)
+func (c *Client) GetChatHistory(chatID string, pageSize int) ([]*HistoryMessage, error) {
+	if pageSize > 50 {
+		pageSize = 50
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+
+	req := larkim.NewListMessageReqBuilder().
+		ContainerIdType("chat").
+		ContainerId(chatID).
+		PageSize(pageSize).
+		Build()
+
+	resp, err := c.larkCli.Im.Message.List(context.Background(), req)
+	if err != nil {
+		return nil, fmt.Errorf("get chat history failed: %w", err)
+	}
+	if !resp.Success() {
+		return nil, fmt.Errorf("get chat history error: %s", resp.Msg)
+	}
+
+	var messages []*HistoryMessage
+	for _, item := range resp.Data.Items {
+		msg := &HistoryMessage{
+			MsgID:      *item.MessageId,
+			MsgType:    *item.MsgType,
+			CreateTime: *item.CreateTime,
+		}
+
+		// Parse content based on message type
+		if item.Body != nil && item.Body.Content != nil {
+			msg.Content = *item.Body.Content
+		}
+
+		// Parse sender
+		if item.Sender != nil {
+			msg.Sender = &Sender{}
+			if item.Sender.Id != nil {
+				msg.Sender.SenderID = *item.Sender.Id
+			}
+			if item.Sender.SenderType != nil {
+				msg.Sender.SenderType = *item.Sender.SenderType
+			}
+			if item.Sender.TenantKey != nil {
+				msg.Sender.TenantKey = *item.Sender.TenantKey
+			}
+		}
+
+		messages = append(messages, msg)
+	}
+
+	fmt.Printf("[Feishu] Retrieved %d messages from chat %s\n", len(messages), chatID)
+	return messages, nil
+}
+
+// GetChatMembers retrieves members of a chat (group)
+func (c *Client) GetChatMembers(chatID string) ([]*ChatMember, error) {
+	req := larkim.NewGetChatMembersReqBuilder().
+		ChatId(chatID).
+		Build()
+
+	resp, err := c.larkCli.Im.ChatMembers.Get(context.Background(), req)
+	if err != nil {
+		return nil, fmt.Errorf("get chat members failed: %w", err)
+	}
+	if !resp.Success() {
+		return nil, fmt.Errorf("get chat members error: %s", resp.Msg)
+	}
+
+	var members []*ChatMember
+	for _, item := range resp.Data.Items {
+		member := &ChatMember{}
+		if item.MemberId != nil {
+			member.MemberID = *item.MemberId
+		}
+		if item.MemberIdType != nil {
+			member.MemberType = *item.MemberIdType
+		}
+		if item.Name != nil {
+			member.Name = *item.Name
+		}
+		members = append(members, member)
+	}
+
+	fmt.Printf("[Feishu] Retrieved %d members from chat %s\n", len(members), chatID)
+	return members, nil
+}
+
+// GetChatInfo retrieves information about a chat
+func (c *Client) GetChatInfo(chatID string) (*ChatInfo, error) {
+	req := larkim.NewGetChatReqBuilder().
+		ChatId(chatID).
+		Build()
+
+	resp, err := c.larkCli.Im.Chat.Get(context.Background(), req)
+	if err != nil {
+		return nil, fmt.Errorf("get chat info failed: %w", err)
+	}
+	if !resp.Success() {
+		return nil, fmt.Errorf("get chat info error: %s", resp.Msg)
+	}
+
+	info := &ChatInfo{
+		ChatID: chatID,
+	}
+	if resp.Data.Name != nil {
+		info.Name = *resp.Data.Name
+	}
+	if resp.Data.Description != nil {
+		info.Description = *resp.Data.Description
+	}
+	if resp.Data.ChatMode != nil {
+		info.ChatType = *resp.Data.ChatMode
+	}
+	if resp.Data.OwnerId != nil {
+		info.OwnerID = *resp.Data.OwnerId
+	}
+	if resp.Data.UserCount != nil {
+		var count int
+		fmt.Sscanf(*resp.Data.UserCount, "%d", &count)
+		info.MemberCount = count
+	}
+
+	fmt.Printf("[Feishu] Got chat info for %s: %s (%d members)\n", chatID, info.Name, info.MemberCount)
+	return info, nil
+}
+
+// FormatHistoryAsContext formats chat history as context string for AI
+func FormatHistoryAsContext(messages []*HistoryMessage, maxMessages int) string {
+	if len(messages) == 0 {
+		return ""
+	}
+
+	if maxMessages > 0 && len(messages) > maxMessages {
+		messages = messages[:maxMessages]
+	}
+
+	var parts []string
+	// Messages are usually newest first, so reverse for chronological order
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		senderType := "User"
+		if msg.Sender != nil && msg.Sender.SenderType == "bot" {
+			senderType = "Bot"
+		}
+
+		// Extract text from content JSON
+		content := msg.Content
+		if msg.MsgType == "text" {
+			var parsed struct {
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal([]byte(content), &parsed); err == nil {
+				content = parsed.Text
+			}
+		}
+
+		parts = append(parts, fmt.Sprintf("[%s]: %s", senderType, content))
+	}
+
+	return joinStrings(parts, "\n")
 }
 
 // Helper functions
