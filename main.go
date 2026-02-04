@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -14,9 +15,94 @@ import (
 )
 
 func main() {
-	// 加载 .env 文件
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, using environment variables")
+	workDirFlag := flag.String("workdir", "", "Working directory for Codex (overrides WORKING_DIR)")
+	flag.Parse()
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("Failed to determine home directory: %v", err)
+	}
+
+	configDir := filepath.Join(homeDir, ".feishu-codex-bridge")
+	defaultEnvPath := filepath.Join(configDir, ".env")
+
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		log.Fatalf("Failed to create config directory %s: %v", configDir, err)
+	}
+
+	// Snapshot environment before loading any file-based configs.
+	// We never override already-exported environment variables.
+	envPreexisting := map[string]struct{}{}
+	for _, kv := range os.Environ() {
+		// "KEY=VALUE"
+		for i := 0; i < len(kv); i++ {
+			if kv[i] == '=' {
+				envPreexisting[kv[:i]] = struct{}{}
+				break
+			}
+		}
+	}
+
+	// Ensure default env exists so binary can run from any directory.
+	_, envStatErr := os.Stat(defaultEnvPath)
+	envMissing := os.IsNotExist(envStatErr)
+	if envMissing {
+		if err := os.WriteFile(defaultEnvPath, []byte(envExample), 0o600); err != nil {
+			log.Fatalf("Failed to write default env file %s: %v", defaultEnvPath, err)
+		}
+		fmt.Printf("Created default config: %s (please edit it). You can also create <workdir>/.feishu-codex-bridge/.env to override per project.\n", defaultEnvPath)
+	}
+
+	applyEnvFile := func(path string, overrideExisting bool) {
+		m, err := godotenv.Read(path)
+		if err != nil {
+			return
+		}
+		for k, v := range m {
+			// Never override real environment variables that were already present
+			// when the process started.
+			if _, ok := envPreexisting[k]; ok {
+				continue
+			}
+			if !overrideExisting {
+				if _, exists := os.LookupEnv(k); exists {
+					continue
+				}
+			}
+			_ = os.Setenv(k, v)
+		}
+	}
+
+	// Load global default env first (does not override real environment variables).
+	applyEnvFile(defaultEnvPath, false)
+
+	// Resolve effective working directory (used for per-project overrides).
+	effectiveWorkDir := ""
+	if *workDirFlag != "" {
+		effectiveWorkDir = *workDirFlag
+	} else if val := os.Getenv("WORKING_DIR"); val != "" {
+		effectiveWorkDir = val
+	} else {
+		effectiveWorkDir = "."
+	}
+
+	perProjectEnvPath := filepath.Join(filepath.Clean(effectiveWorkDir), ".feishu-codex-bridge", ".env")
+	if _, err := os.Stat(perProjectEnvPath); err == nil {
+		// Per-project env should override the global default, but still must not
+		// override environment variables exported before the process started.
+		applyEnvFile(perProjectEnvPath, true)
+	}
+
+	// If required secrets are missing, exit early (do not start Codex).
+	if os.Getenv("FEISHU_APP_ID") == "" || os.Getenv("FEISHU_APP_SECRET") == "" {
+		if envMissing {
+			fmt.Printf("Missing required config. Please edit %s and set FEISHU_APP_ID and FEISHU_APP_SECRET, then re-run.\n", defaultEnvPath)
+			fmt.Printf("Optional per-project override: %s\n", perProjectEnvPath)
+		} else {
+			fmt.Printf("Missing required config. Set FEISHU_APP_ID and FEISHU_APP_SECRET (or edit %s), then re-run.\n", defaultEnvPath)
+			fmt.Printf("Optional per-project override: %s\n", perProjectEnvPath)
+		}
+		os.Exit(2)
 	}
 
 	// Parse session config
@@ -37,8 +123,16 @@ func main() {
 	// Session DB path
 	sessionDBPath := os.Getenv("SESSION_DB_PATH")
 	if sessionDBPath == "" {
-		homeDir, _ := os.UserHomeDir()
-		sessionDBPath = filepath.Join(homeDir, ".feishu-codex", "sessions.db")
+		newDefault := filepath.Join(configDir, "sessions.db")
+		legacyDefault := filepath.Join(homeDir, ".feishu-codex", "sessions.db")
+
+		if _, err := os.Stat(newDefault); err == nil {
+			sessionDBPath = newDefault
+		} else if _, err := os.Stat(legacyDefault); err == nil {
+			sessionDBPath = legacyDefault
+		} else {
+			sessionDBPath = newDefault
+		}
 	}
 
 	config := bridge.Config{
@@ -57,7 +151,13 @@ func main() {
 	}
 
 	if config.WorkingDir == "" {
-		config.WorkingDir = "."
+		if *workDirFlag != "" {
+			config.WorkingDir = *workDirFlag
+		} else {
+			config.WorkingDir = "."
+		}
+	} else if *workDirFlag != "" {
+		config.WorkingDir = *workDirFlag
 	}
 
 	b, err := bridge.New(config)

@@ -4,6 +4,7 @@ node_modules/
 # Build output
 dist/
 feishu-codex-bridge
+bin/
 
 # Environment
 .env
@@ -22,6 +23,9 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Accidental home-tilde dirs (e.g. when a path like "~/.foo" is treated as relative)
+~/
 
 # Debug
 *.pid
