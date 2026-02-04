@@ -7,7 +7,9 @@ type FeishuClient interface {
 	Stop()
 	SendText(chatID, text string) error
 	SendRichText(chatID, title string, content [][]map[string]interface{}) error
-	AddReaction(messageID, emojiType string) error
+	ReplyText(messageID, text string, replyInThread bool) error
+	ReplyRichText(messageID, title string, content [][]map[string]interface{}, replyInThread bool) error
+	AddReaction(messageID, emojiType string) (reactionID string, err error)
 	RemoveReaction(messageID, reactionID string) error
 	DownloadImage(messageID, imageKey string) (string, error)
 	SetDownloadDir(dir string)

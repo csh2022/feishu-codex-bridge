@@ -62,6 +62,10 @@ go install .
 - `/cd /absolute/path` 或 `/workdir /absolute/path`：切换工作目录（bridge 不重启，会重启 codex app-server；会清掉当前 chat 的会话线程）
 - `/clear`：清空当前 chat 的会话上下文（不切换目录、不重启 bridge/codex，只是从头开始）
 
+## 回复引用
+
+本程序会优先以“回复消息（引用原消息）”的方式进行输出：每条回复都会引用触发它的那条用户消息，避免多人/多条消息时串行错乱。
+
 ## 单实例运行
 
 本程序默认使用文件锁确保单实例运行：`~/.feishu-codex-bridge/bridge.lock`。

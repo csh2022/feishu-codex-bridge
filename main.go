@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"syscall"
 
@@ -186,14 +187,25 @@ func main() {
 
 	// 优雅退出
 	var shuttingDown int32
+	var shutdownOnce sync.Once
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		<-sigCh
-		atomic.StoreInt32(&shuttingDown, 1)
-		fmt.Println("\nShutting down...")
-		b.Stop()
+		sigCount := 0
+		for range sigCh {
+			sigCount++
+			if sigCount == 1 {
+				atomic.StoreInt32(&shuttingDown, 1)
+				fmt.Println("\nShutting down...")
+				shutdownOnce.Do(func() {
+					go b.Stop()
+				})
+				continue
+			}
+			fmt.Println("\nForce exit.")
+			os.Exit(130)
+		}
 	}()
 
 	fmt.Println("Starting Feishu-Codex Bridge (ACP mode)...")

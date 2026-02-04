@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
@@ -75,6 +76,8 @@ type Client struct {
 	cancel      context.CancelFunc
 }
 
+const defaultRequestTimeout = 20 * time.Second
+
 // NewClient creates a new Feishu client
 func NewClient(appID, appSecret string) *Client {
 	return &Client{
@@ -82,6 +85,14 @@ func NewClient(appID, appSecret string) *Client {
 		appSecret:   appSecret,
 		downloadDir: "/tmp/feishu-images",
 	}
+}
+
+func (c *Client) requestContext() (context.Context, context.CancelFunc) {
+	base := c.ctx
+	if base == nil {
+		base = context.Background()
+	}
+	return context.WithTimeout(base, defaultRequestTimeout)
 }
 
 // SetDownloadDir sets the directory for downloading images
@@ -275,7 +286,9 @@ func (c *Client) DownloadImage(messageID, imageKey string) (string, error) {
 		Type("image").
 		Build()
 
-	resp, err := c.larkCli.Im.MessageResource.Get(context.Background(), req)
+	ctx, cancel := c.requestContext()
+	defer cancel()
+	resp, err := c.larkCli.Im.MessageResource.Get(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("failed to get image: %w", err)
 	}
@@ -314,7 +327,9 @@ func (c *Client) SendText(chatID, text string) error {
 			Build()).
 		Build()
 
-	resp, err := c.larkCli.Im.Message.Create(context.Background(), req)
+	ctx, cancel := c.requestContext()
+	defer cancel()
+	resp, err := c.larkCli.Im.Message.Create(ctx, req)
 	if err != nil {
 		return fmt.Errorf("send message failed: %w", err)
 	}
@@ -323,6 +338,34 @@ func (c *Client) SendText(chatID, text string) error {
 	}
 
 	fmt.Printf("[Feishu] Message sent to %s\n", chatID)
+	return nil
+}
+
+// ReplyText replies to a specific message with a text message (quote-style reply)
+func (c *Client) ReplyText(messageID, text string, replyInThread bool) error {
+	content := map[string]string{"text": text}
+	contentJSON, _ := json.Marshal(content)
+
+	req := larkim.NewReplyMessageReqBuilder().
+		MessageId(messageID).
+		Body(larkim.NewReplyMessageReqBodyBuilder().
+			MsgType(larkim.MsgTypeText).
+			Content(string(contentJSON)).
+			ReplyInThread(replyInThread).
+			Build()).
+		Build()
+
+	ctx, cancel := c.requestContext()
+	defer cancel()
+	resp, err := c.larkCli.Im.Message.Reply(ctx, req)
+	if err != nil {
+		return fmt.Errorf("reply message failed: %w", err)
+	}
+	if !resp.Success() {
+		return fmt.Errorf("reply message error: %s", resp.Msg)
+	}
+
+	fmt.Printf("[Feishu] Replied to message %s\n", messageID)
 	return nil
 }
 
@@ -345,7 +388,9 @@ func (c *Client) SendRichText(chatID, title string, content [][]map[string]inter
 			Build()).
 		Build()
 
-	resp, err := c.larkCli.Im.Message.Create(context.Background(), req)
+	ctx, cancel := c.requestContext()
+	defer cancel()
+	resp, err := c.larkCli.Im.Message.Create(ctx, req)
 	if err != nil {
 		return fmt.Errorf("send rich text failed: %w", err)
 	}
@@ -357,8 +402,41 @@ func (c *Client) SendRichText(chatID, title string, content [][]map[string]inter
 	return nil
 }
 
+// ReplyRichText replies to a specific message with a rich text (post) message
+func (c *Client) ReplyRichText(messageID, title string, content [][]map[string]interface{}, replyInThread bool) error {
+	post := map[string]interface{}{
+		"zh_cn": map[string]interface{}{
+			"title":   title,
+			"content": content,
+		},
+	}
+	contentJSON, _ := json.Marshal(post)
+
+	req := larkim.NewReplyMessageReqBuilder().
+		MessageId(messageID).
+		Body(larkim.NewReplyMessageReqBodyBuilder().
+			MsgType(larkim.MsgTypePost).
+			Content(string(contentJSON)).
+			ReplyInThread(replyInThread).
+			Build()).
+		Build()
+
+	ctx, cancel := c.requestContext()
+	defer cancel()
+	resp, err := c.larkCli.Im.Message.Reply(ctx, req)
+	if err != nil {
+		return fmt.Errorf("reply rich text failed: %w", err)
+	}
+	if !resp.Success() {
+		return fmt.Errorf("reply rich text error: %s", resp.Msg)
+	}
+
+	fmt.Printf("[Feishu] Rich text replied to %s\n", messageID)
+	return nil
+}
+
 // AddReaction adds an emoji reaction to a message
-func (c *Client) AddReaction(messageID, emojiType string) error {
+func (c *Client) AddReaction(messageID, emojiType string) (string, error) {
 	req := larkim.NewCreateMessageReactionReqBuilder().
 		MessageId(messageID).
 		Body(larkim.NewCreateMessageReactionReqBodyBuilder().
@@ -366,16 +444,21 @@ func (c *Client) AddReaction(messageID, emojiType string) error {
 			Build()).
 		Build()
 
-	resp, err := c.larkCli.Im.MessageReaction.Create(context.Background(), req)
+	ctx, cancel := c.requestContext()
+	defer cancel()
+	resp, err := c.larkCli.Im.MessageReaction.Create(ctx, req)
 	if err != nil {
-		return fmt.Errorf("add reaction failed: %w", err)
+		return "", fmt.Errorf("add reaction failed: %w", err)
 	}
 	if !resp.Success() {
-		return fmt.Errorf("add reaction error: %s", resp.Msg)
+		return "", fmt.Errorf("add reaction error: %s", resp.Msg)
 	}
 
 	fmt.Printf("[Feishu] Reaction %s added to message %s\n", emojiType, messageID)
-	return nil
+	if resp.Data != nil && resp.Data.ReactionId != nil {
+		return *resp.Data.ReactionId, nil
+	}
+	return "", nil
 }
 
 // RemoveReaction removes an emoji reaction from a message
@@ -385,7 +468,9 @@ func (c *Client) RemoveReaction(messageID, reactionID string) error {
 		ReactionId(reactionID).
 		Build()
 
-	resp, err := c.larkCli.Im.MessageReaction.Delete(context.Background(), req)
+	ctx, cancel := c.requestContext()
+	defer cancel()
+	resp, err := c.larkCli.Im.MessageReaction.Delete(ctx, req)
 	if err != nil {
 		return fmt.Errorf("remove reaction failed: %w", err)
 	}
@@ -413,7 +498,9 @@ func (c *Client) GetChatHistory(chatID string, pageSize int) ([]*HistoryMessage,
 		PageSize(pageSize).
 		Build()
 
-	resp, err := c.larkCli.Im.Message.List(context.Background(), req)
+	ctx, cancel := c.requestContext()
+	defer cancel()
+	resp, err := c.larkCli.Im.Message.List(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("get chat history failed: %w", err)
 	}
@@ -461,7 +548,9 @@ func (c *Client) GetChatMembers(chatID string) ([]*ChatMember, error) {
 		ChatId(chatID).
 		Build()
 
-	resp, err := c.larkCli.Im.ChatMembers.Get(context.Background(), req)
+	ctx, cancel := c.requestContext()
+	defer cancel()
+	resp, err := c.larkCli.Im.ChatMembers.Get(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("get chat members failed: %w", err)
 	}
@@ -494,7 +583,9 @@ func (c *Client) GetChatInfo(chatID string) (*ChatInfo, error) {
 		ChatId(chatID).
 		Build()
 
-	resp, err := c.larkCli.Im.Chat.Get(context.Background(), req)
+	ctx, cancel := c.requestContext()
+	defer cancel()
+	resp, err := c.larkCli.Im.Chat.Get(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("get chat info failed: %w", err)
 	}

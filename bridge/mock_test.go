@@ -19,10 +19,12 @@ type MockFeishuClient struct {
 
 type MockSentMessage struct {
 	ChatID  string
+	MsgID   string
 	Text    string
 	IsRich  bool
 	Title   string
 	Content [][]map[string]interface{}
+	IsReply bool
 }
 
 type MockReaction struct {
@@ -60,12 +62,34 @@ func (m *MockFeishuClient) SendRichText(chatID, title string, content [][]map[st
 	return nil
 }
 
-func (m *MockFeishuClient) AddReaction(messageID, emojiType string) error {
+func (m *MockFeishuClient) ReplyText(messageID, text string, replyInThread bool) error {
+	m.SentMessages = append(m.SentMessages, MockSentMessage{
+		MsgID:   messageID,
+		Text:    text,
+		IsReply: true,
+	})
+	return nil
+}
+
+func (m *MockFeishuClient) ReplyRichText(messageID, title string, content [][]map[string]interface{}, replyInThread bool) error {
+	m.SentMessages = append(m.SentMessages, MockSentMessage{
+		MsgID:    messageID,
+		IsRich:   true,
+		Title:    title,
+		Content:  content,
+		IsReply:  true,
+	})
+	return nil
+}
+
+func (m *MockFeishuClient) AddReaction(messageID, emojiType string) (string, error) {
+	reactionID := "mock-reaction-" + emojiType + "-" + messageID
 	m.Reactions = append(m.Reactions, MockReaction{
 		MessageID: messageID,
 		EmojiType: emojiType,
+		ReactionID: reactionID,
 	})
-	return nil
+	return reactionID, nil
 }
 
 func (m *MockFeishuClient) RemoveReaction(messageID, reactionID string) error {
