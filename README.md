@@ -61,3 +61,14 @@ go install .
 - `/pwd`：查看当前工作目录
 - `/cd /absolute/path` 或 `/workdir /absolute/path`：切换工作目录（bridge 不重启，会重启 codex app-server；会清掉当前 chat 的会话线程）
 - `/clear`：清空当前 chat 的会话上下文（不切换目录、不重启 bridge/codex，只是从头开始）
+
+## 单实例运行
+
+本程序默认使用文件锁确保单实例运行：`~/.feishu-codex-bridge/bridge.lock`。
+如果你看到“another instance is running (pid xxx)”或启动时提示 `PID=xxx`，请手动结束该进程后再启动，例如：
+
+```bash
+kill -TERM xxx
+# 若仍未退出：
+kill -KILL xxx
+```

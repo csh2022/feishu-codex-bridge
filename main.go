@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -8,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/anthropics/feishu-codex-bridge/bridge"
@@ -29,6 +32,22 @@ func main() {
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		log.Fatalf("Failed to create config directory %s: %v", configDir, err)
 	}
+
+	lockFile, err := acquireSingleInstanceLock(configDir)
+	if err != nil {
+		var instErr *SingleInstanceError
+		if errors.As(err, &instErr) && instErr.PID > 0 {
+			fmt.Printf("❌ 已有实例在运行（PID=%d），本程序只允许单实例运行。\n", instErr.PID)
+			fmt.Printf("请手动停止后再重试，例如：\n")
+			fmt.Printf("  kill -TERM %d\n", instErr.PID)
+			fmt.Printf("  # 若仍未退出：kill -KILL %d\n", instErr.PID)
+		} else {
+			fmt.Printf("❌ %v\n", err)
+			fmt.Println("提示：本程序只允许单实例运行；请手动停止正在运行的实例后再重试。")
+		}
+		os.Exit(3)
+	}
+	defer lockFile.Close()
 
 	// Snapshot environment before loading any file-based configs.
 	// We never override already-exported environment variables.
@@ -166,18 +185,21 @@ func main() {
 	}
 
 	// 优雅退出
+	var shuttingDown int32
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
 		<-sigCh
+		atomic.StoreInt32(&shuttingDown, 1)
 		fmt.Println("\nShutting down...")
 		b.Stop()
-		os.Exit(0)
 	}()
 
 	fmt.Println("Starting Feishu-Codex Bridge (ACP mode)...")
-	if err := b.Start(); err != nil {
+	if err := b.Start(); err != nil && atomic.LoadInt32(&shuttingDown) == 0 && !errors.Is(err, context.Canceled) {
 		log.Fatalf("Bridge error: %v", err)
+	} else if err != nil {
+		log.Printf("Bridge stopped: %v", err)
 	}
 }
