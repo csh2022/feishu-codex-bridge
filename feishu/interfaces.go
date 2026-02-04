@@ -4,6 +4,7 @@ package feishu
 type FeishuClient interface {
 	OnMessage(handler MessageHandler)
 	OnMessageRecalled(handler MessageRecalledHandler)
+	SetDebug(enabled bool)
 	Start() error
 	Stop()
 	SendText(chatID, text string) error

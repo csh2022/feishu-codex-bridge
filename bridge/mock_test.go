@@ -11,6 +11,7 @@ import (
 type MockFeishuClient struct {
 	OnMessageHandler  feishu.MessageHandler
 	OnRecalledHandler feishu.MessageRecalledHandler
+	DebugEnabled      bool
 	SentMessages      []MockSentMessage
 	Reactions         []MockReaction
 	DownloadedImages  []string
@@ -41,6 +42,10 @@ func (m *MockFeishuClient) OnMessage(handler feishu.MessageHandler) {
 
 func (m *MockFeishuClient) OnMessageRecalled(handler feishu.MessageRecalledHandler) {
 	m.OnRecalledHandler = handler
+}
+
+func (m *MockFeishuClient) SetDebug(enabled bool) {
+	m.DebugEnabled = enabled
 }
 
 func (m *MockFeishuClient) Start() error {

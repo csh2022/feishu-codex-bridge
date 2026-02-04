@@ -82,6 +82,7 @@ type Client struct {
 	onMessage   MessageHandler
 	onRecalled  MessageRecalledHandler
 	downloadDir string
+	debug       bool
 	ctx         context.Context
 	cancel      context.CancelFunc
 }
@@ -108,6 +109,10 @@ func (c *Client) requestContext() (context.Context, context.CancelFunc) {
 // SetDownloadDir sets the directory for downloading images
 func (c *Client) SetDownloadDir(dir string) {
 	c.downloadDir = dir
+}
+
+func (c *Client) SetDebug(enabled bool) {
+	c.debug = enabled
 }
 
 // OnMessage sets the message handler
@@ -138,9 +143,13 @@ func (c *Client) Start() error {
 		})
 
 	// Create WebSocket client
+	wsLogLevel := larkcore.LogLevelInfo
+	if c.debug {
+		wsLogLevel = larkcore.LogLevelDebug
+	}
 	c.wsCli = larkws.NewClient(c.appID, c.appSecret,
 		larkws.WithEventHandler(eventHandler),
-		larkws.WithLogLevel(larkcore.LogLevelInfo),
+		larkws.WithLogLevel(wsLogLevel),
 	)
 
 	fmt.Println("[Feishu] Starting WebSocket connection...")
@@ -231,8 +240,23 @@ func (c *Client) handleRecalled(event *larkim.P2MessageRecalledV1) {
 	}
 
 	chatID := ""
+	chatIDPresent := false
 	if event.Event.ChatId != nil {
 		chatID = *event.Event.ChatId
+		chatIDPresent = true
+	}
+
+	if c.debug {
+		recallType := ""
+		if event.Event.RecallType != nil {
+			recallType = *event.Event.RecallType
+		}
+		recallTime := ""
+		if event.Event.RecallTime != nil {
+			recallTime = *event.Event.RecallTime
+		}
+		fmt.Printf("[Feishu][Debug] Recall raw: message_id=%s chat_id=%s(chat_id_present=%v) recall_type=%s recall_time=%s\n",
+			*event.Event.MessageId, chatID, chatIDPresent, recallType, recallTime)
 	}
 
 	ev := &MessageRecalled{

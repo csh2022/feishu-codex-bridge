@@ -86,6 +86,7 @@ func New(config Config) (*Bridge, error) {
 
 	// Initialize Feishu client
 	feishuClient := feishu.NewClient(config.FeishuAppID, config.FeishuAppSecret)
+	feishuClient.SetDebug(config.Debug)
 
 	// Initialize Codex client
 	codexClient := codex.NewClient(config.WorkingDir, config.CodexModel)
@@ -103,6 +104,16 @@ func New(config Config) (*Bridge, error) {
 	}, nil
 }
 
+func (b *Bridge) debugf(format string, args ...any) {
+	if !b.config.Debug {
+		return
+	}
+	if format == "" {
+		return
+	}
+	fmt.Printf("[Bridge][Debug] "+format+"\n", args...)
+}
+
 func (b *Bridge) Start() error {
 	b.ctx, b.cancel = context.WithCancel(context.Background())
 
@@ -110,6 +121,9 @@ func (b *Bridge) Start() error {
 	fmt.Printf("[Bridge] Working directory: %s\n", b.config.WorkingDir)
 	fmt.Printf("[Bridge] Model: %s\n", b.config.CodexModel)
 	fmt.Printf("[Bridge] Session DB: %s\n", b.config.SessionDBPath)
+	if b.config.Debug {
+		fmt.Println("[Bridge] Debug: true")
+	}
 
 	// Start Codex app-server
 	if err := b.codexClient.Start(b.ctx); err != nil {
@@ -230,6 +244,7 @@ func (b *Bridge) enqueueMessage(msg *feishu.Message) {
 	}
 
 	if b.isRecalled(msg.ChatID, msg.MsgID) {
+		b.debugf("Skip enqueue recalled message: chat_id=%s msg_id=%s", msg.ChatID, msg.MsgID)
 		return
 	}
 
@@ -247,7 +262,10 @@ func (b *Bridge) enqueueMessage(msg *feishu.Message) {
 
 	q.mu.Lock()
 	q.pending = append(q.pending, msg)
+	pendingLen := len(q.pending)
 	q.mu.Unlock()
+
+	b.debugf("Enqueued: chat_id=%s msg_id=%s pending=%d chan_len=%d", msg.ChatID, msg.MsgID, pendingLen, len(q.ch))
 
 	if !b.trySendQueue(q.ch, msg) {
 		q.mu.Lock()
@@ -285,9 +303,12 @@ func (b *Bridge) chatWorker(chatID string, q *chatQueue) {
 			if msg == nil {
 				continue
 			}
+			b.debugf("Dequeued: chat_id=%s msg_id=%s", chatID, msg.MsgID)
 			q.mu.Lock()
 			q.pending = removePendingByMsgID(q.pending, msg.MsgID)
+			pendingLen := len(q.pending)
 			q.mu.Unlock()
+			b.debugf("After dequeue pending len: chat_id=%s pending=%d", chatID, pendingLen)
 			b.processQueuedMessage(chatID, msg)
 		}
 	}
@@ -297,6 +318,7 @@ func (b *Bridge) processQueuedMessage(chatID string, msg *feishu.Message) {
 	state := b.getChatState(chatID)
 
 	if b.isRecalled(msg.ChatID, msg.MsgID) {
+		b.debugf("Skip processing recalled message: chat_id=%s msg_id=%s", msg.ChatID, msg.MsgID)
 		b.clearRecalled(msg.ChatID, msg.MsgID)
 		return
 	}
@@ -757,13 +779,16 @@ func (b *Bridge) handleFeishuMessageRecalled(ev *feishu.MessageRecalled) {
 	if ev == nil || ev.ChatID == "" || ev.MsgID == "" {
 		// Some recall events might not include chat_id; we still try best-effort removal by msgID.
 		if ev != nil && ev.MsgID != "" {
+			b.debugf("Recall event without chat_id: msg_id=%s", ev.MsgID)
 			b.markRecalled("", ev.MsgID)
-			b.dropPendingMessageAllChats(ev.MsgID)
+			removed := b.dropPendingMessageAllChats(ev.MsgID)
+			b.debugf("Drop pending by msg_id across chats: msg_id=%s removed=%d", ev.MsgID, removed)
 			b.clearChatContextByMsgID(ev.MsgID)
 		}
 		return
 	}
 
+	b.debugf("Recall event: chat_id=%s msg_id=%s", ev.ChatID, ev.MsgID)
 	b.markRecalled(ev.ChatID, ev.MsgID)
 
 	// If this message is currently being processed, interrupt and clear context
@@ -777,9 +802,10 @@ func (b *Bridge) handleFeishuMessageRecalled(ev *feishu.MessageRecalled) {
 	}
 
 	// Remove from pending list for display and to reduce queue pressure.
-	b.dropPendingMessage(ev.ChatID, ev.MsgID)
+	removedInChat := b.dropPendingMessage(ev.ChatID, ev.MsgID)
 	// Also best-effort remove across all chats to guard against chat_id mismatches.
-	b.dropPendingMessageAllChats(ev.MsgID)
+	removedAll := b.dropPendingMessageAllChats(ev.MsgID)
+	b.debugf("Drop pending: in_chat_removed=%d all_chats_removed=%d", removedInChat, removedAll)
 }
 
 func (b *Bridge) markRecalled(chatID, msgID string) {
@@ -876,19 +902,22 @@ func (b *Bridge) formatQueueStatus(chatID string) string {
 	return strings.Join(lines, "\n")
 }
 
-func (b *Bridge) dropPendingMessage(chatID, msgID string) {
+func (b *Bridge) dropPendingMessage(chatID, msgID string) int {
 	b.queuesMu.Lock()
 	q := b.chatQueues[chatID]
 	b.queuesMu.Unlock()
 	if q == nil {
-		return
+		return 0
 	}
 	q.mu.Lock()
+	before := len(q.pending)
 	q.pending = removePendingByMsgID(q.pending, msgID)
+	after := len(q.pending)
 	q.mu.Unlock()
+	return before - after
 }
 
-func (b *Bridge) dropPendingMessageAllChats(msgID string) {
+func (b *Bridge) dropPendingMessageAllChats(msgID string) int {
 	b.queuesMu.Lock()
 	qs := make([]*chatQueue, 0, len(b.chatQueues))
 	for _, q := range b.chatQueues {
@@ -896,14 +925,19 @@ func (b *Bridge) dropPendingMessageAllChats(msgID string) {
 	}
 	b.queuesMu.Unlock()
 
+	removed := 0
 	for _, q := range qs {
 		if q == nil {
 			continue
 		}
 		q.mu.Lock()
+		before := len(q.pending)
 		q.pending = removePendingByMsgID(q.pending, msgID)
+		after := len(q.pending)
 		q.mu.Unlock()
+		removed += before - after
 	}
+	return removed
 }
 
 func (b *Bridge) clearChatContextByMsgID(msgID string) {
