@@ -10,6 +10,18 @@
 go build -o ./bin/feishu-codex-bridge .
 ```
 
+也可以使用编译脚本（支持 `--test`/交叉编译等参数）：
+
+```bash
+./scripts/build.sh
+```
+
+查看参数：
+
+```bash
+./scripts/build.sh --help
+```
+
 也可以直接输出到你希望的安装位置（可能需要权限）：
 
 ```bash
