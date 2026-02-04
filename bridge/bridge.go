@@ -28,7 +28,7 @@ type Config struct {
 
 type Bridge struct {
 	config       Config
-	feishuClient *feishu.Client
+	feishuClient feishu.FeishuClient
 	codexClient  *codex.Client
 	sessionStore *session.Store
 
@@ -177,56 +177,75 @@ func (b *Bridge) handleFeishuMessageV2(msg *feishu.Message) {
 
 	if cmd, ok := ParseCommand(msg.Content); ok {
 		replyInThread := msg.ChatType == "group"
+		reactDone := func() {
+			_, _ = b.feishuClient.AddReaction(msg.MsgID, "DONE")
+		}
 		switch cmd.Kind {
 		case CommandShowDir:
 			wd := b.config.WorkingDir
 			if abs, err := filepath.Abs(wd); err == nil {
 				wd = abs
 			}
-			if err := b.feishuClient.ReplyText(msg.MsgID, fmt.Sprintf("📁 当前工作目录：%s\n发送 /help 查看可用命令。", wd), replyInThread); err != nil {
-				b.feishuClient.SendText(msg.ChatID, fmt.Sprintf("📁 当前工作目录：%s\n发送 /help 查看可用命令。", wd))
+			if err := b.feishuClient.ReplyText(msg.MsgID, fmt.Sprintf("当前工作目录：%s", wd), replyInThread); err != nil {
+				_ = b.feishuClient.SendText(msg.ChatID, fmt.Sprintf("当前工作目录：%s", wd))
+				reactDone()
+				return
 			}
+			reactDone()
 			return
 
 		case CommandHelp:
-			helpText := strings.Join([]string{
-				"可用命令：",
-				"/help 或 /h           查看帮助",
-				"/pwd                 查看当前工作目录",
-				"/cd <绝对路径>        切换工作目录",
-				"/workdir <绝对路径> 或 /w <绝对路径>   切换工作目录",
-				"/clear 或 /c          清空当前会话上下文",
-				"/queue 或 /q          查看队列",
-			}, "\n")
-			if err := b.feishuClient.ReplyText(msg.MsgID, helpText, replyInThread); err != nil {
-				b.feishuClient.SendText(msg.ChatID, helpText)
+			title, content := buildHelpPost()
+			if err := b.feishuClient.ReplyRichText(msg.MsgID, title, content, replyInThread); err != nil {
+				helpText := buildHelpFallbackText()
+				if err2 := b.feishuClient.ReplyText(msg.MsgID, helpText, replyInThread); err2 != nil {
+					_ = b.feishuClient.SendText(msg.ChatID, helpText)
+					reactDone()
+					return
+				}
+				reactDone()
+				return
 			}
+			reactDone()
 			return
 
 		case CommandQueue:
 			text := b.formatQueueStatus(msg.ChatID)
 			if err := b.feishuClient.ReplyText(msg.MsgID, text, replyInThread); err != nil {
 				_ = b.feishuClient.SendText(msg.ChatID, text)
+				reactDone()
+				return
 			}
+			reactDone()
 			return
 
 		case CommandClear:
 			b.clearChatContext(msg.ChatID)
-			if err := b.feishuClient.ReplyText(msg.MsgID, "✅ 已清空当前会话上下文（保持当前工作目录不变）。", replyInThread); err != nil {
-				b.feishuClient.SendText(msg.ChatID, "✅ 已清空当前会话上下文（保持当前工作目录不变）。")
+			if err := b.feishuClient.ReplyText(msg.MsgID, "✅ 已清空当前会话上下文", replyInThread); err != nil {
+				_ = b.feishuClient.SendText(msg.ChatID, "✅ 已清空当前会话上下文")
+				reactDone()
+				return
 			}
+			reactDone()
 			return
 
 		case CommandSwitchDir:
 			if err := b.switchWorkingDir(msg.ChatID, cmd.Arg); err != nil {
 				if err2 := b.feishuClient.ReplyText(msg.MsgID, fmt.Sprintf("❌ 切换工作目录失败：%v", err), replyInThread); err2 != nil {
-					b.feishuClient.SendText(msg.ChatID, fmt.Sprintf("❌ 切换工作目录失败：%v", err))
+					_ = b.feishuClient.SendText(msg.ChatID, fmt.Sprintf("❌ 切换工作目录失败：%v", err))
+					reactDone()
+					return
 				}
+				reactDone()
+				return
 			} else {
-				if err2 := b.feishuClient.ReplyText(msg.MsgID, fmt.Sprintf("✅ 已切换工作目录：%s", b.config.WorkingDir), replyInThread); err2 != nil {
-					b.feishuClient.SendText(msg.ChatID, fmt.Sprintf("✅ 已切换工作目录：%s", b.config.WorkingDir))
+				if err2 := b.feishuClient.ReplyText(msg.MsgID, fmt.Sprintf("✅ 已切换到新的工作目录：%s", b.config.WorkingDir), replyInThread); err2 != nil {
+					_ = b.feishuClient.SendText(msg.ChatID, fmt.Sprintf("✅ 已切换到新的工作目录：%s", b.config.WorkingDir))
+					reactDone()
+					return
 				}
 			}
+			reactDone()
 			return
 		}
 	}
@@ -863,12 +882,6 @@ func (b *Bridge) closeAllChatQueues() {
 }
 
 func (b *Bridge) formatQueueStatus(chatID string) string {
-	state := b.getChatState(chatID)
-	state.mu.Lock()
-	processing := state.Processing
-	currentMsgID := state.MsgID
-	state.mu.Unlock()
-
 	pending := []*feishu.Message(nil)
 	b.queuesMu.Lock()
 	q := b.chatQueues[chatID]
@@ -878,28 +891,7 @@ func (b *Bridge) formatQueueStatus(chatID string) string {
 		pending = append(pending, q.pending...)
 		q.mu.Unlock()
 	}
-
-	lines := []string{}
-	if processing && currentMsgID != "" {
-		lines = append(lines, fmt.Sprintf("正在处理：%s", currentMsgID))
-	} else {
-		lines = append(lines, "正在处理：无")
-	}
-	lines = append(lines, fmt.Sprintf("待处理：%d", len(pending)))
-	for i, m := range pending {
-		if m == nil {
-			continue
-		}
-		content := strings.TrimSpace(m.Content)
-		if content == "" {
-			content = "(空)"
-		}
-		if len(content) > 80 {
-			content = content[:80] + "..."
-		}
-		lines = append(lines, fmt.Sprintf("%d) %s", i+1, content))
-	}
-	return strings.Join(lines, "\n")
+	return fmt.Sprintf("待处理：%d", len(pending))
 }
 
 func (b *Bridge) dropPendingMessage(chatID, msgID string) int {

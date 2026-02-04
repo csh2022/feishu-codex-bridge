@@ -59,7 +59,7 @@ go install .
 
 - `/help`：查看命令帮助
 - `/pwd`：查看当前工作目录
-- `/cd /absolute/path` 或 `/workdir /absolute/path`：切换工作目录（bridge 不重启，会重启 codex app-server；会清掉当前 chat 的会话线程）
+- `/cd /absolute/path`：切换工作目录（bridge 不重启，会重启 codex app-server；会清掉当前 chat 的会话线程）
 - `/clear`：清空当前 chat 的会话上下文（不切换目录、不重启 bridge/codex，只是从头开始）
 
 ## 回复引用

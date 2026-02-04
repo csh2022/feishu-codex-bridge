@@ -121,6 +121,18 @@ func (m *MockFeishuClient) SetDownloadDir(dir string) {
 	m.DownloadDir = dir
 }
 
+func (m *MockFeishuClient) GetChatHistory(chatID string, pageSize int) ([]*feishu.HistoryMessage, error) {
+	return nil, nil
+}
+
+func (m *MockFeishuClient) GetChatMembers(chatID string) ([]*feishu.ChatMember, error) {
+	return nil, nil
+}
+
+func (m *MockFeishuClient) GetChatInfo(chatID string) (*feishu.ChatInfo, error) {
+	return nil, nil
+}
+
 // MockCodexClient is a mock implementation of CodexClient for testing
 type MockCodexClient struct {
 	EventsChan       chan codex.Event

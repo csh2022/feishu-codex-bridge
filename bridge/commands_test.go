@@ -61,26 +61,10 @@ func TestParseCommand_SwitchDir(t *testing.T) {
 	if cmd.Arg != "/tmp/foo" {
 		t.Fatalf("expected arg /tmp/foo, got %q", cmd.Arg)
 	}
-
-	cmd, ok = ParseCommand("/workdir ./a/b/..")
-	if !ok {
-		t.Fatalf("expected ok")
-	}
-	if cmd.Arg != "a" {
-		t.Fatalf("expected cleaned arg a, got %q", cmd.Arg)
-	}
-
-	cmd, ok = ParseCommand("/w ./a/b/..")
-	if !ok {
-		t.Fatalf("expected ok")
-	}
-	if cmd.Arg != "a" {
-		t.Fatalf("expected cleaned arg a, got %q", cmd.Arg)
-	}
 }
 
 func TestParseCommand_WorkdirWithoutArg_NotCommand(t *testing.T) {
-	for _, in := range []string{"/workdir", "  /workdir  ", "/workdir   "} {
+	for _, in := range []string{"/workdir", "  /workdir  ", "/workdir   ", "/w", "  /w  ", "/w   ", "/w /tmp"} {
 		if _, ok := ParseCommand(in); ok {
 			t.Fatalf("expected not a command for %q", in)
 		}

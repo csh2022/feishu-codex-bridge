@@ -49,23 +49,5 @@ func ParseCommand(content string) (Command, bool) {
 		return Command{Kind: CommandSwitchDir, Arg: cleaned}, true
 	}
 
-	if strings.HasPrefix(s, "/workdir ") {
-		arg := strings.TrimSpace(strings.TrimPrefix(s, "/workdir "))
-		if arg == "" {
-			return Command{}, false
-		}
-		cleaned := filepath.Clean(arg)
-		return Command{Kind: CommandSwitchDir, Arg: cleaned}, true
-	}
-
-	if strings.HasPrefix(s, "/w ") {
-		arg := strings.TrimSpace(strings.TrimPrefix(s, "/w "))
-		if arg == "" {
-			return Command{}, false
-		}
-		cleaned := filepath.Clean(arg)
-		return Command{Kind: CommandSwitchDir, Arg: cleaned}, true
-	}
-
 	return Command{}, false
 }
