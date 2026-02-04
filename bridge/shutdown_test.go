@@ -15,12 +15,12 @@ func TestChatWorker_ExitsWhenQueueClosed(t *testing.T) {
 		wg:  sync.WaitGroup{},
 	}
 
-	q := make(chan *feishu.Message)
+	q := &chatQueue{ch: make(chan *feishu.Message)}
 
 	b.wg.Add(1)
 	go b.chatWorker("chat", q)
 
-	close(q)
+	close(q.ch)
 
 	done := make(chan struct{})
 	go func() {
@@ -42,7 +42,7 @@ func TestChatWorker_ExitsWhenContextCanceled(t *testing.T) {
 		wg:  sync.WaitGroup{},
 	}
 
-	q := make(chan *feishu.Message)
+	q := &chatQueue{ch: make(chan *feishu.Message)}
 
 	b.wg.Add(1)
 	go b.chatWorker("chat", q)

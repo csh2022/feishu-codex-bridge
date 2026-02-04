@@ -64,6 +64,15 @@ type HistoryMessage struct {
 // MessageHandler is the callback for received messages
 type MessageHandler func(msg *Message)
 
+// MessageRecalled contains recall event info.
+type MessageRecalled struct {
+	ChatID string
+	MsgID  string
+}
+
+// MessageRecalledHandler is the callback for recalled messages.
+type MessageRecalledHandler func(ev *MessageRecalled)
+
 // Client is the Feishu API client
 type Client struct {
 	appID       string
@@ -71,6 +80,7 @@ type Client struct {
 	larkCli     *lark.Client
 	wsCli       *larkws.Client
 	onMessage   MessageHandler
+	onRecalled  MessageRecalledHandler
 	downloadDir string
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -105,6 +115,10 @@ func (c *Client) OnMessage(handler MessageHandler) {
 	c.onMessage = handler
 }
 
+func (c *Client) OnMessageRecalled(handler MessageRecalledHandler) {
+	c.onRecalled = handler
+}
+
 // Start connects to Feishu via WebSocket and starts listening for messages
 func (c *Client) Start() error {
 	c.ctx, c.cancel = context.WithCancel(context.Background())
@@ -116,6 +130,10 @@ func (c *Client) Start() error {
 	eventHandler := dispatcher.NewEventDispatcher("", "").
 		OnP2MessageReceiveV1(func(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
 			c.handleMessage(event)
+			return nil
+		}).
+		OnP2MessageRecalledV1(func(ctx context.Context, event *larkim.P2MessageRecalledV1) error {
+			c.handleRecalled(event)
 			return nil
 		})
 
@@ -186,7 +204,7 @@ func (c *Client) handleMessage(event *larkim.P2MessageReceiveV1) {
 		msg.Content = c.parseTextContent(*rawMsg.Content)
 	case "image":
 		msg.ImageKeys = c.parseImageContent(*rawMsg.Content)
-		msg.Content = "[圖片]"
+		msg.Content = "[图片]"
 	case "post":
 		content, imageKeys := c.parsePostContent(*rawMsg.Content)
 		msg.Content = content
@@ -201,6 +219,35 @@ func (c *Client) handleMessage(event *larkim.P2MessageReceiveV1) {
 
 	if c.onMessage != nil {
 		c.onMessage(msg)
+	}
+}
+
+func (c *Client) handleRecalled(event *larkim.P2MessageRecalledV1) {
+	if event == nil || event.Event == nil {
+		return
+	}
+	if event.Event.MessageId == nil || *event.Event.MessageId == "" {
+		return
+	}
+
+	chatID := ""
+	if event.Event.ChatId != nil {
+		chatID = *event.Event.ChatId
+	}
+
+	ev := &MessageRecalled{
+		ChatID: chatID,
+		MsgID:  *event.Event.MessageId,
+	}
+
+	if ev.ChatID == "" {
+		fmt.Printf("[Feishu] Message recalled: %s\n", ev.MsgID)
+	} else {
+		fmt.Printf("[Feishu] Message recalled in chat %s: %s\n", ev.ChatID, ev.MsgID)
+	}
+
+	if c.onRecalled != nil {
+		c.onRecalled(ev)
 	}
 }
 

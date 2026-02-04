@@ -1,20 +1,20 @@
-# Codex ACP (App Server Protocol) 完整文檔
+# Codex ACP (App Server Protocol) 完整文档
 
-> 來源：Codex 源碼分析 (`/home/rick/codex-source/codex-rs/app-server-protocol/`)
+> 来源：Codex 源码分析 (`/home/rick/codex-source/codex-rs/app-server-protocol/`)
 
-## 1. 協議概述
+## 1. 协议概述
 
-ACP 是基於 **JSON-RPC 2.0** 的雙向通信協議，通過 **stdio JSONL** 流傳輸：
+ACP 是基于 **JSON-RPC 2.0** 的双向通信协议，通过 **stdio JSONL** 流传输：
 - Client → Server: Requests, Notifications
 - Server → Client: Responses, Notifications, Requests (approval)
 
-**注意**: Codex ACP 不包含 `"jsonrpc":"2.0"` 標頭（與標準 JSON-RPC 略有不同）。
+**注意**: Codex ACP 不包含 `"jsonrpc":"2.0"` 标头（与标准 JSON-RPC 略有不同）。
 
-## 2. 消息類型
+## 2. 消息类型
 
 ### 2.1 Client → Server
 
-**Request (需要響應)**
+**Request (需要响应)**
 ```json
 {
   "id": 1,
@@ -23,7 +23,7 @@ ACP 是基於 **JSON-RPC 2.0** 的雙向通信協議，通過 **stdio JSONL** �
 }
 ```
 
-**Notification (無響應)**
+**Notification (无响应)**
 ```json
 {
   "method": "initialized"
@@ -60,7 +60,7 @@ ACP 是基於 **JSON-RPC 2.0** 的雙向通信協議，通過 **stdio JSONL** �
 }
 ```
 
-**Request (需要 Client 響應，如 approval)**
+**Request (需要 Client 响应，如 approval)**
 ```json
 {
   "id": 100,
@@ -71,7 +71,7 @@ ACP 是基於 **JSON-RPC 2.0** 的雙向通信協議，通過 **stdio JSONL** �
 
 ## 3. 初始化握手
 
-必須在發送其他請求前完成：
+必须在发送其他请求前完成：
 
 ```
 Client → Server: {"id": 0, "method": "initialize", "params": {"clientInfo": {...}}}
@@ -79,46 +79,46 @@ Server → Client: {"id": 0, "result": {"userAgent": "Codex/x.y.z"}}
 Client → Server: {"method": "initialized"}
 ```
 
-## 4. 核心 API 端點
+## 4. 核心 API 端点
 
-### 4.1 Thread 生命週期
-
-| Method | 描述 |
-|--------|------|
-| `thread/start` | 創建新 thread |
-| `thread/resume` | 恢復現有 thread |
-| `thread/fork` | 分支對話 |
-| `thread/list` | 列出 threads（支持分頁） |
-| `thread/read` | 讀取 thread 但不恢復 |
-| `thread/archive` | 歸檔 thread |
-| `thread/rollback` | 回滾最後 N 個 turn |
-| `thread/name/set` | 設置 thread 名稱 |
-
-### 4.2 Turn 生命週期
+### 4.1 Thread 生命周期
 
 | Method | 描述 |
 |--------|------|
-| `turn/start` | 發送用戶輸入，開始生成 |
-| `turn/interrupt` | 中斷當前 turn |
-| `review/start` | 啟動自動審查 |
+| `thread/start` | 创建新 thread |
+| `thread/resume` | 恢复现有 thread |
+| `thread/fork` | 分支对话 |
+| `thread/list` | 列出 threads（支持分页） |
+| `thread/read` | 读取 thread 但不恢复 |
+| `thread/archive` | 归档 thread |
+| `thread/rollback` | 回滚最后 N 个 turn |
+| `thread/name/set` | 设置 thread 名称 |
+
+### 4.2 Turn 生命周期
+
+| Method | 描述 |
+|--------|------|
+| `turn/start` | 发送用户输入，开始生成 |
+| `turn/interrupt` | 中断当前 turn |
+| `review/start` | 启动自动审查 |
 
 ### 4.3 配置
 
 | Method | 描述 |
 |--------|------|
-| `config/read` | 讀取有效配置 |
-| `config/value/write` | 寫入單個配置值 |
-| `config/batchWrite` | 批量寫入配置 |
+| `config/read` | 读取有效配置 |
+| `config/value/write` | 写入单个配置值 |
+| `config/batchWrite` | 批量写入配置 |
 | `model/list` | 列出可用模型 |
 
-## 5. Thread/Turn/Item 數據結構
+## 5. Thread/Turn/Item 数据结构
 
 ### 5.1 Thread
 
 ```typescript
 interface Thread {
   id: string;              // UUID
-  preview: string;         // 預覽文本
+  preview: string;         // 预览文本
   model_provider: string;  // e.g., "anthropic"
   created_at: number;      // Unix timestamp
   updated_at?: number;
@@ -138,7 +138,7 @@ interface Turn {
 }
 ```
 
-### 5.3 ThreadItem (13 種類型)
+### 5.3 ThreadItem (13 种类型)
 
 ```typescript
 type ThreadItem =
@@ -163,22 +163,22 @@ type ThreadItem =
 
 | Event | 描述 |
 |-------|------|
-| `thread/started` | Thread 創建 |
-| `thread/started/updated` | Thread 名稱更新 |
+| `thread/started` | Thread 创建 |
+| `thread/started/updated` | Thread 名称更新 |
 | `thread/tokenUsage/updated` | Token 使用量更新 |
 
 ### 6.2 Turn 事件
 
 | Event | 描述 |
 |-------|------|
-| `turn/started` | Turn 開始（包含初始 turn 對象） |
-| `turn/completed` | Turn 完成（包含最終狀態） |
-| `turn/diff/updated` | 聚合的文件差異 |
-| `turn/plan/updated` | 計劃狀態更新 |
+| `turn/started` | Turn 开始（包含初始 turn 对象） |
+| `turn/completed` | Turn 完成（包含最终状态） |
+| `turn/diff/updated` | 聚合的文件差异 |
+| `turn/plan/updated` | 计划状态更新 |
 
 ### 6.3 Item 事件
 
-每個 Item 的生命週期：`item/started` → [deltas] → `item/completed`
+每个 Item 的生命周期：`item/started` → [deltas] → `item/completed`
 
 **Agent Message Delta**
 ```json
@@ -221,7 +221,7 @@ type ThreadItem =
 
 ## 7. Approval 工作流
 
-### 7.1 命令執行批准
+### 7.1 命令执行批准
 
 ```
 Server → Client: {
@@ -245,7 +245,7 @@ Client → Server: {
 }
 ```
 
-### 7.2 文件變更批准
+### 7.2 文件变更批准
 
 ```
 Server → Client: {
@@ -269,16 +269,16 @@ Client → Server: {
 }
 ```
 
-## 8. 錯誤處理
+## 8. 错误处理
 
-### 8.1 JSON-RPC 錯誤碼
+### 8.1 JSON-RPC 错误码
 
 | Code | 描述 |
 |------|------|
 | -32600 | Invalid Request |
 | -32603 | Internal Error |
 
-### 8.2 Codex 特定錯誤
+### 8.2 Codex 特定错误
 
 ```typescript
 type CodexErrorInfo =
@@ -294,7 +294,7 @@ type CodexErrorInfo =
 
 ## 9. 典型消息流程
 
-### 9.1 創建 Thread 並發送消息
+### 9.1 创建 Thread 并发送消息
 
 ```
 # 1. 初始化
@@ -302,12 +302,12 @@ Client → {"id":0, "method":"initialize", "params":{"clientInfo":{"name":"my-cl
 Server → {"id":0, "result":{"userAgent":"Codex/1.0"}}
 Client → {"method":"initialized"}
 
-# 2. 創建 Thread
+# 2. 创建 Thread
 Client → {"id":1, "method":"thread/start", "params":{}}
 Server → {"id":1, "result":{"threadId":"abc-123"}}
 Server → {"method":"thread/started", "params":{"threadId":"abc-123","thread":{...}}}
 
-# 3. 發送消息
+# 3. 发送消息
 Client → {"id":2, "method":"turn/start", "params":{"threadId":"abc-123","prompt":"Hello"}}
 Server → {"id":2, "result":{"turnId":"turn-1"}}
 Server → {"method":"turn/started", "params":{"threadId":"abc-123","turn":{...}}}
@@ -317,23 +317,23 @@ Server → {"method":"item/completed", "params":{"threadId":"abc-123","turnId":"
 Server → {"method":"turn/completed", "params":{"threadId":"abc-123","turnId":"turn-1","status":"completed"}}
 ```
 
-### 9.2 恢復 Thread
+### 9.2 恢复 Thread
 
 ```
 Client → {"id":3, "method":"thread/resume", "params":{"threadId":"abc-123"}}
-Server → {"id":3, "result":{"thread":{...}}}  # 包含完整歷史
+Server → {"id":3, "result":{"thread":{...}}}  # 包含完整历史
 ```
 
-## 10. 配置覆蓋層級
+## 10. 配置覆盖层级
 
-解析順序（後者覆蓋前者）：
-1. 系統默認
-2. 用戶配置 (`~/.config/codex/config.toml`)
-3. CLI 參數
+解析顺序（后者覆盖前者）：
+1. 系统默认
+2. 用户配置 (`~/.config/codex/config.toml`)
+3. CLI 参数
 4. `thread/start` params
 5. `turn/start` params
 
-可覆蓋的配置：
+可覆盖的配置：
 - `model`
 - `model_provider_id`
 - `cwd`
@@ -348,14 +348,14 @@ Server → {"id":3, "result":{"thread":{...}}}  # 包含完整歷史
 # 生成 JSON Schema
 codex app-server generate-json-schema --out /path/to/output
 
-# 生成 TypeScript 類型
+# 生成 TypeScript 类型
 codex app-server generate-ts --out /path/to/output
 ```
 
-已生成的 schema 位於：
+已生成的 schema 位于：
 - `/home/rick/codex-source/codex-rs/app-server-protocol/schema/json/v2/`
 
-## 12. 與 Feishu Bridge 整合要點
+## 12. 与 Feishu Bridge 整合要点
 
 ### 12.1 Session 映射
 
@@ -364,29 +364,29 @@ Feishu Chat ID  →  Codex Thread ID
 oc_xxx123       →  abc-123-def-456
 ```
 
-### 12.2 消息轉發
+### 12.2 消息转发
 
 1. **Feishu → Codex**
-   - 收到飛書消息 → `turn/start` with prompt
+   - 收到飞书消息 → `turn/start` with prompt
 
 2. **Codex → Feishu**
-   - `item/agentMessage/delta` → 累積文本
-   - `turn/completed` → 發送最終響應到飛書
+   - `item/agentMessage/delta` → 累积文本
+   - `turn/completed` → 发送最终响应到飞书
 
-### 12.3 流式更新（可選）
+### 12.3 流式更新（可选）
 
-- 可以在收到 delta 時更新飛書消息
-- 或等待 `turn/completed` 後一次性發送
+- 可以在收到 delta 时更新飞书消息
+- 或等待 `turn/completed` 后一次性发送
 
-### 12.4 Approval 處理
+### 12.4 Approval 处理
 
-- 對於 Feishu 場景，可以自動批准或禁用需要批准的操作
-- 使用 `--full-auto` 或設置 `approval_policy`
+- 对于 Feishu 场景，可以自动批准或禁用需要批准的操作
+- 使用 `--full-auto` 或设置 `approval_policy`
 
 ---
 
-## 參考
+## 参考
 
-- 源碼：`/home/rick/codex-source/codex-rs/app-server-protocol/`
+- 源码：`/home/rick/codex-source/codex-rs/app-server-protocol/`
 - Schema：`/home/rick/codex-source/codex-rs/app-server-protocol/schema/json/v2/`
-- 測試：`/home/rick/codex-source/codex-rs/app-server/tests/suite/v2/`
+- 测试：`/home/rick/codex-source/codex-rs/app-server/tests/suite/v2/`

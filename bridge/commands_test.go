@@ -15,7 +15,7 @@ func TestParseCommand_ShowDir(t *testing.T) {
 }
 
 func TestParseCommand_Help(t *testing.T) {
-	for _, in := range []string{"/help", "  /help  "} {
+	for _, in := range []string{"/help", "  /help  ", "/h"} {
 		cmd, ok := ParseCommand(in)
 		if !ok {
 			t.Fatalf("expected ok for %q", in)
@@ -27,13 +27,25 @@ func TestParseCommand_Help(t *testing.T) {
 }
 
 func TestParseCommand_Clear(t *testing.T) {
-	for _, in := range []string{"/clear", "  /clear  "} {
+	for _, in := range []string{"/clear", "  /clear  ", "/c"} {
 		cmd, ok := ParseCommand(in)
 		if !ok {
 			t.Fatalf("expected ok for %q", in)
 		}
 		if cmd.Kind != CommandClear {
 			t.Fatalf("expected %s for %q, got %s", CommandClear, in, cmd.Kind)
+		}
+	}
+}
+
+func TestParseCommand_Queue(t *testing.T) {
+	for _, in := range []string{"/queue", "  /queue  ", "/q"} {
+		cmd, ok := ParseCommand(in)
+		if !ok {
+			t.Fatalf("expected ok for %q", in)
+		}
+		if cmd.Kind != CommandQueue {
+			t.Fatalf("expected %s for %q, got %s", CommandQueue, in, cmd.Kind)
 		}
 	}
 }
@@ -51,6 +63,14 @@ func TestParseCommand_SwitchDir(t *testing.T) {
 	}
 
 	cmd, ok = ParseCommand("/workdir ./a/b/..")
+	if !ok {
+		t.Fatalf("expected ok")
+	}
+	if cmd.Arg != "a" {
+		t.Fatalf("expected cleaned arg a, got %q", cmd.Arg)
+	}
+
+	cmd, ok = ParseCommand("/w ./a/b/..")
 	if !ok {
 		t.Fatalf("expected ok")
 	}

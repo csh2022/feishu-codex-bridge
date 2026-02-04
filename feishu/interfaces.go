@@ -3,6 +3,7 @@ package feishu
 // FeishuClient defines the interface for Feishu operations
 type FeishuClient interface {
 	OnMessage(handler MessageHandler)
+	OnMessageRecalled(handler MessageRecalledHandler)
 	Start() error
 	Stop()
 	SendText(chatID, text string) error

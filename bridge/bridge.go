@@ -26,7 +26,7 @@ type Config struct {
 	Debug           bool
 }
 
-type Bridge struct { 
+type Bridge struct {
 	config       Config
 	feishuClient *feishu.Client
 	codexClient  *codex.Client
@@ -42,25 +42,35 @@ type Bridge struct {
 	activeMu      sync.Mutex
 
 	queuesMu   sync.Mutex
-	chatQueues map[string]chan *feishu.Message
+	chatQueues map[string]*chatQueue
+
+	recalledMu  sync.Mutex
+	recalled    map[string]map[string]struct{}
+	recalledAll map[string]struct{}
 
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
 
+type chatQueue struct {
+	ch      chan *feishu.Message
+	pending []*feishu.Message
+	mu      sync.Mutex
+}
+
 type ChatState struct {
-	ThreadID   string
-	TurnID     string
-	MsgID      string // Current message ID for reactions
+	ThreadID             string
+	TurnID               string
+	MsgID                string // Current message ID for reactions
 	ProcessingReactionID string
-	Processing bool
-	Gen        uint64
-	ChatType   string
-	done       chan struct{}
-	Buffer     strings.Builder
-	LastItem   string
-	mu         sync.Mutex
+	Processing           bool
+	Gen                  uint64
+	ChatType             string
+	done                 chan struct{}
+	Buffer               strings.Builder
+	LastItem             string
+	mu                   sync.Mutex
 }
 
 func New(config Config) (*Bridge, error) {
@@ -81,13 +91,15 @@ func New(config Config) (*Bridge, error) {
 	codexClient := codex.NewClient(config.WorkingDir, config.CodexModel)
 
 	return &Bridge{
-		config:       config,
-		feishuClient: feishuClient,
-		codexClient:  codexClient,
-		sessionStore: sessionStore,
-		chatStates:   make(map[string]*ChatState),
+		config:        config,
+		feishuClient:  feishuClient,
+		codexClient:   codexClient,
+		sessionStore:  sessionStore,
+		chatStates:    make(map[string]*ChatState),
 		activeThreads: make(map[string]struct{}),
-		chatQueues:   make(map[string]chan *feishu.Message),
+		chatQueues:    make(map[string]*chatQueue),
+		recalled:      make(map[string]map[string]struct{}),
+		recalledAll:   make(map[string]struct{}),
 	}, nil
 }
 
@@ -109,6 +121,7 @@ func (b *Bridge) Start() error {
 
 	// Set up Feishu message handler
 	b.feishuClient.OnMessage(b.handleFeishuMessageV2)
+	b.feishuClient.OnMessageRecalled(b.handleFeishuMessageRecalled)
 
 	// Start session cleanup
 	b.StartSessionCleanup(10 * time.Minute)
@@ -164,14 +177,22 @@ func (b *Bridge) handleFeishuMessageV2(msg *feishu.Message) {
 		case CommandHelp:
 			helpText := strings.Join([]string{
 				"可用命令：",
-				"/help                查看帮助",
+				"/help 或 /h           查看帮助",
 				"/pwd                 查看当前工作目录",
 				"/cd <绝对路径>        切换工作目录",
-				"/workdir <绝对路径>   切换工作目录",
-				"/clear               清空当前会话上下文",
+				"/workdir <绝对路径> 或 /w <绝对路径>   切换工作目录",
+				"/clear 或 /c          清空当前会话上下文",
+				"/queue 或 /q          查看队列",
 			}, "\n")
 			if err := b.feishuClient.ReplyText(msg.MsgID, helpText, replyInThread); err != nil {
 				b.feishuClient.SendText(msg.ChatID, helpText)
+			}
+			return
+
+		case CommandQueue:
+			text := b.formatQueueStatus(msg.ChatID)
+			if err := b.feishuClient.ReplyText(msg.MsgID, text, replyInThread); err != nil {
+				_ = b.feishuClient.SendText(msg.ChatID, text)
 			}
 			return
 
@@ -208,17 +229,30 @@ func (b *Bridge) enqueueMessage(msg *feishu.Message) {
 		}
 	}
 
+	if b.isRecalled(msg.ChatID, msg.MsgID) {
+		return
+	}
+
 	b.queuesMu.Lock()
 	q, ok := b.chatQueues[msg.ChatID]
 	if !ok {
-		q = make(chan *feishu.Message, 100)
+		q = &chatQueue{
+			ch: make(chan *feishu.Message, 100),
+		}
 		b.chatQueues[msg.ChatID] = q
 		b.wg.Add(1)
 		go b.chatWorker(msg.ChatID, q)
 	}
 	b.queuesMu.Unlock()
 
-	if !b.trySendQueue(q, msg) {
+	q.mu.Lock()
+	q.pending = append(q.pending, msg)
+	q.mu.Unlock()
+
+	if !b.trySendQueue(q.ch, msg) {
+		q.mu.Lock()
+		q.pending = removePendingByMsgID(q.pending, msg.MsgID)
+		q.mu.Unlock()
 		_ = b.feishuClient.ReplyText(msg.MsgID, "⚠️ 排队消息过多，请稍后再试。", msg.ChatType == "group")
 	}
 }
@@ -238,19 +272,22 @@ func (b *Bridge) trySendQueue(q chan *feishu.Message, msg *feishu.Message) (ok b
 	}
 }
 
-func (b *Bridge) chatWorker(chatID string, q <-chan *feishu.Message) {
+func (b *Bridge) chatWorker(chatID string, q *chatQueue) {
 	defer b.wg.Done()
 	for {
 		select {
 		case <-b.ctx.Done():
 			return
-		case msg, ok := <-q:
+		case msg, ok := <-q.ch:
 			if !ok {
 				return
 			}
 			if msg == nil {
 				continue
 			}
+			q.mu.Lock()
+			q.pending = removePendingByMsgID(q.pending, msg.MsgID)
+			q.mu.Unlock()
 			b.processQueuedMessage(chatID, msg)
 		}
 	}
@@ -258,6 +295,11 @@ func (b *Bridge) chatWorker(chatID string, q <-chan *feishu.Message) {
 
 func (b *Bridge) processQueuedMessage(chatID string, msg *feishu.Message) {
 	state := b.getChatState(chatID)
+
+	if b.isRecalled(msg.ChatID, msg.MsgID) {
+		b.clearRecalled(msg.ChatID, msg.MsgID)
+		return
+	}
 
 	state.mu.Lock()
 	state.Processing = true
@@ -309,6 +351,9 @@ func (b *Bridge) processQueuedMessage(chatID string, msg *feishu.Message) {
 		if current != gen {
 			return false
 		}
+		if b.isRecalled(msg.ChatID, msg.MsgID) {
+			return false
+		}
 		if err := b.feishuClient.ReplyText(msg.MsgID, text, replyInThread); err != nil {
 			_ = b.feishuClient.SendText(chatID, text)
 		}
@@ -339,7 +384,7 @@ func (b *Bridge) processQueuedMessage(chatID string, msg *feishu.Message) {
 		fmt.Printf("[Bridge] Creating new thread for chat %s\n", chatID)
 		threadID, err = b.codexClient.ThreadStart(ctx, nil)
 		if err != nil {
-			sendReply(fmt.Sprintf("❌ 創建會話失敗: %v", err))
+			sendReply(fmt.Sprintf("❌ 创建会话失败: %v", err))
 			return
 		}
 		b.sessionStore.Create(chatID, threadID)
@@ -364,7 +409,7 @@ func (b *Bridge) processQueuedMessage(chatID string, msg *feishu.Message) {
 			_ = b.sessionStore.Delete(chatID)
 			threadID, err = b.codexClient.ThreadStart(ctx, nil)
 			if err != nil {
-				sendReply(fmt.Sprintf("❌ 創建會話失敗: %v", err))
+				sendReply(fmt.Sprintf("❌ 创建会话失败: %v", err))
 				return
 			}
 			_, _ = b.sessionStore.Create(chatID, threadID)
@@ -377,11 +422,11 @@ func (b *Bridge) processQueuedMessage(chatID string, msg *feishu.Message) {
 			state.mu.Unlock()
 			turnID, err = b.codexClient.TurnStart(ctx, threadID, msg.Content, imagePaths)
 			if err != nil {
-				sendReply(fmt.Sprintf("❌ 發送請求失敗: %v", err))
+				sendReply(fmt.Sprintf("❌ 发送请求失败: %v", err))
 				return
 			}
 		} else {
-			sendReply(fmt.Sprintf("❌ 發送請求失敗: %v", err))
+			sendReply(fmt.Sprintf("❌ 发送请求失败: %v", err))
 			return
 		}
 	}
@@ -500,7 +545,7 @@ func (b *Bridge) handleTurnCompleted(params codex.TurnCompletedParams) {
 	state.mu.Unlock()
 
 	if response == "" {
-		response = "✅ (無文字回應)"
+		response = "✅（无文字回应）"
 	}
 
 	// Replace "OnIt" reaction with completion reaction
@@ -631,9 +676,12 @@ func (b *Bridge) switchWorkingDir(chatID, newDir string) error {
 	// Drop queued messages for this chat (they were intended for the previous workdir).
 	b.queuesMu.Lock()
 	if q, ok := b.chatQueues[chatID]; ok {
+		q.mu.Lock()
+		q.pending = nil
+		q.mu.Unlock()
 		for {
 			select {
-			case <-q:
+			case <-q.ch:
 			default:
 				goto drained
 			}
@@ -690,9 +738,12 @@ func (b *Bridge) clearChatContext(chatID string) {
 	// Drop queued messages for this chat.
 	b.queuesMu.Lock()
 	if q, ok := b.chatQueues[chatID]; ok {
+		q.mu.Lock()
+		q.pending = nil
+		q.mu.Unlock()
 		for {
 			select {
-			case <-q:
+			case <-q.ch:
 			default:
 				goto drained
 			}
@@ -702,14 +753,183 @@ func (b *Bridge) clearChatContext(chatID string) {
 	b.queuesMu.Unlock()
 }
 
+func (b *Bridge) handleFeishuMessageRecalled(ev *feishu.MessageRecalled) {
+	if ev == nil || ev.ChatID == "" || ev.MsgID == "" {
+		// Some recall events might not include chat_id; we still try best-effort removal by msgID.
+		if ev != nil && ev.MsgID != "" {
+			b.markRecalled("", ev.MsgID)
+			b.dropPendingMessageAllChats(ev.MsgID)
+			b.clearChatContextByMsgID(ev.MsgID)
+		}
+		return
+	}
+
+	b.markRecalled(ev.ChatID, ev.MsgID)
+
+	// If this message is currently being processed, interrupt and clear context
+	// to avoid sending a reply to a recalled message and to avoid polluting the session.
+	state := b.getChatState(ev.ChatID)
+	state.mu.Lock()
+	currentMsgID := state.MsgID
+	state.mu.Unlock()
+	if currentMsgID == ev.MsgID {
+		b.clearChatContext(ev.ChatID)
+	}
+
+	// Remove from pending list for display and to reduce queue pressure.
+	b.dropPendingMessage(ev.ChatID, ev.MsgID)
+	// Also best-effort remove across all chats to guard against chat_id mismatches.
+	b.dropPendingMessageAllChats(ev.MsgID)
+}
+
+func (b *Bridge) markRecalled(chatID, msgID string) {
+	b.recalledMu.Lock()
+	defer b.recalledMu.Unlock()
+	b.recalledAll[msgID] = struct{}{}
+	if chatID == "" {
+		return
+	}
+	m, ok := b.recalled[chatID]
+	if !ok {
+		m = make(map[string]struct{})
+		b.recalled[chatID] = m
+	}
+	m[msgID] = struct{}{}
+}
+
+func (b *Bridge) isRecalled(chatID, msgID string) bool {
+	b.recalledMu.Lock()
+	defer b.recalledMu.Unlock()
+	if _, ok := b.recalledAll[msgID]; ok {
+		return true
+	}
+	m, ok := b.recalled[chatID]
+	if !ok {
+		return false
+	}
+	_, ok = m[msgID]
+	return ok
+}
+
+func (b *Bridge) clearRecalled(chatID, msgID string) {
+	b.recalledMu.Lock()
+	defer b.recalledMu.Unlock()
+	delete(b.recalledAll, msgID)
+	if chatID == "" {
+		return
+	}
+	if m, ok := b.recalled[chatID]; ok {
+		delete(m, msgID)
+		if len(m) == 0 {
+			delete(b.recalled, chatID)
+		}
+	}
+}
+
 func (b *Bridge) closeAllChatQueues() {
 	b.queuesMu.Lock()
 	defer b.queuesMu.Unlock()
 	for chatID, q := range b.chatQueues {
 		_ = chatID
-		close(q)
+		close(q.ch)
 	}
-	b.chatQueues = make(map[string]chan *feishu.Message)
+	b.chatQueues = make(map[string]*chatQueue)
+}
+
+func (b *Bridge) formatQueueStatus(chatID string) string {
+	state := b.getChatState(chatID)
+	state.mu.Lock()
+	processing := state.Processing
+	currentMsgID := state.MsgID
+	state.mu.Unlock()
+
+	pending := []*feishu.Message(nil)
+	b.queuesMu.Lock()
+	q := b.chatQueues[chatID]
+	b.queuesMu.Unlock()
+	if q != nil {
+		q.mu.Lock()
+		pending = append(pending, q.pending...)
+		q.mu.Unlock()
+	}
+
+	lines := []string{}
+	if processing && currentMsgID != "" {
+		lines = append(lines, fmt.Sprintf("正在处理：%s", currentMsgID))
+	} else {
+		lines = append(lines, "正在处理：无")
+	}
+	lines = append(lines, fmt.Sprintf("待处理：%d", len(pending)))
+	for i, m := range pending {
+		if m == nil {
+			continue
+		}
+		content := strings.TrimSpace(m.Content)
+		if content == "" {
+			content = "(空)"
+		}
+		if len(content) > 80 {
+			content = content[:80] + "..."
+		}
+		lines = append(lines, fmt.Sprintf("%d) %s", i+1, content))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (b *Bridge) dropPendingMessage(chatID, msgID string) {
+	b.queuesMu.Lock()
+	q := b.chatQueues[chatID]
+	b.queuesMu.Unlock()
+	if q == nil {
+		return
+	}
+	q.mu.Lock()
+	q.pending = removePendingByMsgID(q.pending, msgID)
+	q.mu.Unlock()
+}
+
+func (b *Bridge) dropPendingMessageAllChats(msgID string) {
+	b.queuesMu.Lock()
+	qs := make([]*chatQueue, 0, len(b.chatQueues))
+	for _, q := range b.chatQueues {
+		qs = append(qs, q)
+	}
+	b.queuesMu.Unlock()
+
+	for _, q := range qs {
+		if q == nil {
+			continue
+		}
+		q.mu.Lock()
+		q.pending = removePendingByMsgID(q.pending, msgID)
+		q.mu.Unlock()
+	}
+}
+
+func (b *Bridge) clearChatContextByMsgID(msgID string) {
+	b.chatStatesMu.RLock()
+	defer b.chatStatesMu.RUnlock()
+	for chatID, st := range b.chatStates {
+		st.mu.Lock()
+		current := st.MsgID
+		st.mu.Unlock()
+		if current == msgID {
+			go b.clearChatContext(chatID)
+		}
+	}
+}
+func removePendingByMsgID(pending []*feishu.Message, msgID string) []*feishu.Message {
+	if len(pending) == 0 {
+		return pending
+	}
+	n := 0
+	for _, m := range pending {
+		if m == nil || m.MsgID != msgID {
+			pending[n] = m
+			n++
+		}
+	}
+	return pending[:n]
 }
 
 // StartSessionCleanup starts a goroutine to periodically clean up stale sessions

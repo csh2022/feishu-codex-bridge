@@ -15,6 +15,7 @@ const (
 	CommandShowDir   = "show_dir"
 	CommandHelp      = "help"
 	CommandClear     = "clear"
+	CommandQueue     = "queue"
 )
 
 func ParseCommand(content string) (Command, bool) {
@@ -23,12 +24,16 @@ func ParseCommand(content string) (Command, bool) {
 		return Command{}, false
 	}
 
-	if s == "/help" {
+	if s == "/help" || s == "/h" {
 		return Command{Kind: CommandHelp}, true
 	}
 
-	if s == "/clear" {
+	if s == "/clear" || s == "/c" {
 		return Command{Kind: CommandClear}, true
+	}
+
+	if s == "/queue" || s == "/q" {
+		return Command{Kind: CommandQueue}, true
 	}
 
 	if s == "/pwd" {
@@ -46,6 +51,15 @@ func ParseCommand(content string) (Command, bool) {
 
 	if strings.HasPrefix(s, "/workdir ") {
 		arg := strings.TrimSpace(strings.TrimPrefix(s, "/workdir "))
+		if arg == "" {
+			return Command{}, false
+		}
+		cleaned := filepath.Clean(arg)
+		return Command{Kind: CommandSwitchDir, Arg: cleaned}, true
+	}
+
+	if strings.HasPrefix(s, "/w ") {
+		arg := strings.TrimSpace(strings.TrimPrefix(s, "/w "))
 		if arg == "" {
 			return Command{}, false
 		}

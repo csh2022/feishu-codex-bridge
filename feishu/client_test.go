@@ -2,6 +2,8 @@ package feishu
 
 import (
 	"testing"
+
+	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
 func TestNewClient(t *testing.T) {
@@ -38,6 +40,35 @@ func TestOnMessage(t *testing.T) {
 
 	if client.onMessage == nil {
 		t.Error("onMessage handler not set")
+	}
+}
+
+func TestHandleRecalled_AllowsNilChatID(t *testing.T) {
+	client := NewClient("app_id", "app_secret")
+
+	var got *MessageRecalled
+	client.OnMessageRecalled(func(ev *MessageRecalled) {
+		got = ev
+	})
+
+	msgID := "om_test_msg_1"
+	event := &larkim.P2MessageRecalledV1{
+		Event: &larkim.P2MessageRecalledV1Data{
+			MessageId: &msgID,
+			ChatId:    nil, // p2p 撤回事件可能没有 chat_id
+		},
+	}
+
+	client.handleRecalled(event)
+
+	if got == nil {
+		t.Fatalf("expected recalled handler to be called")
+	}
+	if got.MsgID != msgID {
+		t.Fatalf("MsgID mismatch: got %q, want %q", got.MsgID, msgID)
+	}
+	if got.ChatID != "" {
+		t.Fatalf("ChatID mismatch: got %q, want empty", got.ChatID)
 	}
 }
 

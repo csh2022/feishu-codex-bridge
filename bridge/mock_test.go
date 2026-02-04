@@ -9,12 +9,13 @@ import (
 
 // MockFeishuClient is a mock implementation of FeishuClient for testing
 type MockFeishuClient struct {
-	OnMessageHandler feishu.MessageHandler
-	SentMessages     []MockSentMessage
-	Reactions        []MockReaction
-	DownloadedImages []string
-	DownloadDir      string
-	StartError       error
+	OnMessageHandler  feishu.MessageHandler
+	OnRecalledHandler feishu.MessageRecalledHandler
+	SentMessages      []MockSentMessage
+	Reactions         []MockReaction
+	DownloadedImages  []string
+	DownloadDir       string
+	StartError        error
 }
 
 type MockSentMessage struct {
@@ -36,6 +37,10 @@ type MockReaction struct {
 
 func (m *MockFeishuClient) OnMessage(handler feishu.MessageHandler) {
 	m.OnMessageHandler = handler
+}
+
+func (m *MockFeishuClient) OnMessageRecalled(handler feishu.MessageRecalledHandler) {
+	m.OnRecalledHandler = handler
 }
 
 func (m *MockFeishuClient) Start() error {
@@ -73,11 +78,11 @@ func (m *MockFeishuClient) ReplyText(messageID, text string, replyInThread bool)
 
 func (m *MockFeishuClient) ReplyRichText(messageID, title string, content [][]map[string]interface{}, replyInThread bool) error {
 	m.SentMessages = append(m.SentMessages, MockSentMessage{
-		MsgID:    messageID,
-		IsRich:   true,
-		Title:    title,
-		Content:  content,
-		IsReply:  true,
+		MsgID:   messageID,
+		IsRich:  true,
+		Title:   title,
+		Content: content,
+		IsReply: true,
 	})
 	return nil
 }
@@ -85,8 +90,8 @@ func (m *MockFeishuClient) ReplyRichText(messageID, title string, content [][]ma
 func (m *MockFeishuClient) AddReaction(messageID, emojiType string) (string, error) {
 	reactionID := "mock-reaction-" + emojiType + "-" + messageID
 	m.Reactions = append(m.Reactions, MockReaction{
-		MessageID: messageID,
-		EmojiType: emojiType,
+		MessageID:  messageID,
+		EmojiType:  emojiType,
 		ReactionID: reactionID,
 	})
 	return reactionID, nil
