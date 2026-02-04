@@ -50,6 +50,30 @@ func TestParseCommand_Queue(t *testing.T) {
 	}
 }
 
+func TestParseCommand_Status(t *testing.T) {
+	for _, in := range []string{"/status", "  /status  ", "/s"} {
+		cmd, ok := ParseCommand(in)
+		if !ok {
+			t.Fatalf("expected ok for %q", in)
+		}
+		if cmd.Kind != CommandStatus {
+			t.Fatalf("expected %s for %q, got %s", CommandStatus, in, cmd.Kind)
+		}
+	}
+}
+
+func TestParseCommand_Reset(t *testing.T) {
+	for _, in := range []string{"/reset", "  /reset  ", "/r"} {
+		cmd, ok := ParseCommand(in)
+		if !ok {
+			t.Fatalf("expected ok for %q", in)
+		}
+		if cmd.Kind != CommandReset {
+			t.Fatalf("expected %s for %q, got %s", CommandReset, in, cmd.Kind)
+		}
+	}
+}
+
 func TestParseCommand_SwitchDir(t *testing.T) {
 	cmd, ok := ParseCommand("/cd /tmp/foo")
 	if !ok {

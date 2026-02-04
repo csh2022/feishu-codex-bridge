@@ -16,6 +16,8 @@ const (
 	CommandHelp      = "help"
 	CommandClear     = "clear"
 	CommandQueue     = "queue"
+	CommandStatus    = "status"
+	CommandReset     = "reset"
 )
 
 func ParseCommand(content string) (Command, bool) {
@@ -34,6 +36,14 @@ func ParseCommand(content string) (Command, bool) {
 
 	if s == "/queue" || s == "/q" {
 		return Command{Kind: CommandQueue}, true
+	}
+
+	if s == "/status" || s == "/s" {
+		return Command{Kind: CommandStatus}, true
+	}
+
+	if s == "/reset" || s == "/r" {
+		return Command{Kind: CommandReset}, true
 	}
 
 	if s == "/pwd" {

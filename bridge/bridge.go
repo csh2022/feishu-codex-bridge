@@ -219,10 +219,39 @@ func (b *Bridge) handleFeishuMessageV2(msg *feishu.Message) {
 			reactDone()
 			return
 
+		case CommandStatus:
+			text := b.formatStatus(msg.ChatID)
+			if err := b.feishuClient.ReplyText(msg.MsgID, text, replyInThread); err != nil {
+				_ = b.feishuClient.SendText(msg.ChatID, text)
+				reactDone()
+				return
+			}
+			reactDone()
+			return
+
 		case CommandClear:
 			b.clearChatContext(msg.ChatID)
 			if err := b.feishuClient.ReplyText(msg.MsgID, "✅ 已清空当前会话上下文", replyInThread); err != nil {
 				_ = b.feishuClient.SendText(msg.ChatID, "✅ 已清空当前会话上下文")
+				reactDone()
+				return
+			}
+			reactDone()
+			return
+
+		case CommandReset:
+			if err := b.resetCodexAndClearAll(); err != nil {
+				text := fmt.Sprintf("❌ 重置失败：%v", err)
+				if err2 := b.feishuClient.ReplyText(msg.MsgID, text, replyInThread); err2 != nil {
+					_ = b.feishuClient.SendText(msg.ChatID, text)
+					reactDone()
+					return
+				}
+				reactDone()
+				return
+			}
+			if err := b.feishuClient.ReplyText(msg.MsgID, "✅ 已重置", replyInThread); err != nil {
+				_ = b.feishuClient.SendText(msg.ChatID, "✅ 已重置")
 				reactDone()
 				return
 			}
@@ -527,6 +556,12 @@ func (b *Bridge) handleEvent(event codex.Event) {
 		if err := json.Unmarshal(event.Params, &params); err != nil {
 			return
 		}
+		if chatID := b.findChatByThread(params.ThreadID); chatID != "" && params.Item != nil {
+			state := b.getChatState(chatID)
+			state.mu.Lock()
+			state.LastItem = params.Item.Type
+			state.mu.Unlock()
+		}
 		if b.config.Debug {
 			fmt.Printf("[Bridge] Item started: %s (type: %s)\n", params.Item.ID, params.Item.Type)
 		}
@@ -535,6 +570,12 @@ func (b *Bridge) handleEvent(event codex.Event) {
 		var params codex.ItemCompletedParams
 		if err := json.Unmarshal(event.Params, &params); err != nil {
 			return
+		}
+		if chatID := b.findChatByThread(params.ThreadID); chatID != "" {
+			state := b.getChatState(chatID)
+			state.mu.Lock()
+			state.LastItem = ""
+			state.mu.Unlock()
 		}
 		if b.config.Debug {
 			fmt.Printf("[Bridge] Item completed: %s\n", params.Item.ID)
@@ -792,6 +833,69 @@ func (b *Bridge) clearChatContext(chatID string) {
 	drained:
 	}
 	b.queuesMu.Unlock()
+}
+
+func (b *Bridge) resetCodexAndClearAll() error {
+	b.codexMu.Lock()
+	defer b.codexMu.Unlock()
+
+	// Clear all chat contexts and sessions.
+	b.chatStatesMu.RLock()
+	states := make(map[string]*ChatState, len(b.chatStates))
+	for chatID, st := range b.chatStates {
+		states[chatID] = st
+	}
+	b.chatStatesMu.RUnlock()
+
+	for chatID, st := range states {
+		var threadID string
+		var msgID string
+		var reactionID string
+		var done chan struct{}
+
+		st.mu.Lock()
+		threadID = st.ThreadID
+		msgID = st.MsgID
+		reactionID = st.ProcessingReactionID
+		done = st.done
+		st.done = nil
+		st.Gen++
+		st.Processing = false
+		st.ThreadID = ""
+		st.TurnID = ""
+		st.MsgID = ""
+		st.ProcessingReactionID = ""
+		st.LastItem = ""
+		st.Buffer.Reset()
+		st.mu.Unlock()
+
+		if done != nil {
+			close(done)
+		}
+		if threadID != "" {
+			_ = b.codexClient.TurnInterrupt(b.ctx, threadID)
+		}
+		if msgID != "" && reactionID != "" {
+			_ = b.feishuClient.RemoveReaction(msgID, reactionID)
+		}
+		_ = b.sessionStore.Delete(chatID)
+	}
+
+	// Clear active threads and queues.
+	b.activeMu.Lock()
+	b.activeThreads = make(map[string]struct{})
+	b.activeMu.Unlock()
+	b.closeAllChatQueues()
+
+	// Restart Codex app-server.
+	_ = b.codexClient.Stop()
+	newClient := codex.NewClient(b.config.WorkingDir, b.config.CodexModel)
+	if err := newClient.Start(b.ctx); err != nil {
+		return fmt.Errorf("启动 Codex 失败：%w", err)
+	}
+	b.codexClient = newClient
+	b.startEventProcessor(b.codexClient)
+	return nil
 }
 
 func (b *Bridge) handleFeishuMessageRecalled(ev *feishu.MessageRecalled) {
